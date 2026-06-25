@@ -1,4 +1,6 @@
-﻿# KiCad KiKit Panelizer
+﻿Languages: [English](README.md) | [中文](README-zh.md)
+
+# KiCad KiKit Panelizer
 
 KiCad KiKit Panelizer is a Codex/ChatGPT skill and Python utility for preparing KiCad `.kicad_pcb` boards for KiKit annotation-mode panelization. It inserts real `footprint "kikit:Tab"` annotations into a copy of the PCB and generates KiKit JSON presets.
 
@@ -132,3 +134,4 @@ kicad-kikit-panelizer/
 ## License
 
 MIT
+
