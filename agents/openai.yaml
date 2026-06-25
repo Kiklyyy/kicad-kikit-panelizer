@@ -1,0 +1,3 @@
+interface:
+  display_name: KiCad KiKit Panelizer
+  short_description: Add KiKit annotation tabs and generate KiKit panel presets.

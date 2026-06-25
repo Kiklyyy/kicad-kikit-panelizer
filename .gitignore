@@ -1,0 +1,25 @@
+﻿__pycache__/
+*.pyc
+*.log
+*.tmp
+*.bak
+*.zip
+!dist/skill.zip
+
+# KiCad real project files should not be committed by default
+*.kicad_pcb
+*.kicad_pro
+*.kicad_sch
+*.kicad_prl
+*.step
+*.wrl
+*.pos
+*.drl
+*.gbr
+*.gbrjob
+
+panel_output/
+production/
+bom/
+*-backups/
+fp-info-cache
