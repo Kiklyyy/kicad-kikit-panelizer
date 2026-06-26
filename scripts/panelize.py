@@ -27,7 +27,7 @@ from typing import List, Optional, Tuple
 NUMBER_RE = r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?'
 
 
-# ─── Helpers ────────────────────────────────────────────────────────────────
+# Helpers
 
 
 def new_uuid() -> str:
@@ -54,7 +54,7 @@ def find_matching_close(text: str, open_pos: int) -> int:
     return -1
 
 
-# ─── Data classes ───────────────────────────────────────────────────────────
+# Data classes
 
 
 @dataclass
@@ -110,7 +110,7 @@ class TabPlacement:
     annotation_offset: float = 0.5
 
 
-# ─── Edge.Cuts extraction ──────────────────────────────────────────────────
+# Edge.Cuts extraction
 
 
 def iter_kicad_blocks(pcb_text: str, name: str) -> List[str]:
@@ -205,7 +205,7 @@ def classify_edges(segments: List[LineSegment], bmin: Point, bmax: Point) -> dic
     return edges
 
 
-# ─── Edge feature detection ─────────────────────────────────────────────────
+# Edge feature detection
 
 
 def detect_edge_features(pcb_text: str, bmin: Point, bmax: Point) -> List[EdgeFeature]:
@@ -258,7 +258,7 @@ def detect_edge_features(pcb_text: str, bmin: Point, bmax: Point) -> List[EdgeFe
             features.append(EdgeFeature(kind=kind, center=center, description=desc))
             already_classified.add(paren)
         elif npth_pat.search(fp_text):
-            # Unnamed footprint with NPTH pad — treat as mounting hole
+            # Unnamed footprint with NPTH pad; treat as mounting hole.
             sm = size_pat.search(fp_text)
             r = float(sm.group(1)) / 2 if sm else 1.0
             features.append(EdgeFeature(
@@ -269,7 +269,7 @@ def detect_edge_features(pcb_text: str, bmin: Point, bmax: Point) -> List[EdgeFe
     return features
 
 
-# ─── Tab placement ──────────────────────────────────────────────────────────
+# Tab placement
 
 
 def detect_edge_opening_risk(edges: dict) -> bool:
@@ -318,7 +318,9 @@ def compute_tab_placements(
     circles = circles or []
     placements: List[TabPlacement] = []
     warnings: List[str] = []
-    debug = {'edge_circles': [], 'circle_keepouts': [], 'safe_segments': []}
+    debug = {'edge_circles': [], 'circle_keepouts': [], 'safe_segments': [],
+             'paired_intervals': [], 'paired_top_bottom_x': [],
+             'paired_left_right_y': [], 'alignment_checks': []}
 
     for c in circles:
         debug['edge_circles'].append({'center': [round(c.center.x, 3), round(c.center.y, 3)], 'radius': round(c.radius, 3)})
@@ -389,81 +391,131 @@ def compute_tab_placements(
         const = (s.p1.y + s.p2.y) / 2 if horiz else (s.p1.x + s.p2.x) / 2
         return lo, hi, const
 
-    def tab_points_on_segment(s: LineSegment, count: int, width: float, horiz: bool) -> Optional[List[Tuple[float, float, Tuple[float, float]]]]:
-        lo, hi, const = segment_axis(s, horiz)
-        length = hi - lo
-        required = count * width + (count - 1) * min_tab_gap + 2 * end_clearance
-        if count <= 0 or length + 1e-9 < required:
-            return None
-        usable_lo = lo + end_clearance + width / 2
-        usable_hi = hi - end_clearance - width / 2
-        coords = [(usable_lo + usable_hi) / 2] if count == 1 else [usable_lo + i * (usable_hi - usable_lo) / (count - 1) for i in range(count)]
-        result = []
-        for coord in coords:
-            ax, ay = (coord, const) if horiz else (const, coord)
-            result.append((ax, ay, (coord - width / 2, coord + width / 2)))
-        return result
-
-    def one_tab_on_segment(s: LineSegment, edge: str, horiz: bool) -> Optional[TabPlacement]:
-        for width in (tab_width, narrow_width):
-            pts = tab_points_on_segment(s, 1, width, horiz)
-            if not pts:
-                continue
-            ax, ay, interval = pts[0]
-            ok, msg = is_clear(ax, ay, width / 2)
-            if ok:
-                return make_tab(edge, ax, ay, width, interval, horiz)
-            warnings.append(f'{msg} - skipped')
-        return None
-
-    def place(edge_segs: List[LineSegment], edge: str, count: int, horiz: bool):
+    def prepare_safe(edge_segs: List[LineSegment], edge: str, horiz: bool) -> List[LineSegment]:
         if not edge_segs:
-            warnings.append(f'No {edge} edge segments found'); return
+            warnings.append(f'No {edge} edge segments found')
+            return []
         safe = safe_segments(edge_segs, edge, horiz)
         usable = [s for s in safe if s.length() >= narrow_width + 2 * end_clearance]
         if not usable:
-            warnings.append(f'STRONG WARNING: {edge} edge has no safe segment long enough for a {narrow_width}mm tab after keepouts'); return
-        if len(safe) != len(edge_segs) or any(s.length() < e.length() - 0.001 for s in safe for e in edge_segs if (s.is_horizontal() == e.is_horizontal())):
+            warnings.append(f'STRONG WARNING: {edge} edge has no safe segment long enough for a {narrow_width}mm tab after keepouts')
+            return []
+        if debug['circle_keepouts'] and any(k['edge'] == edge for k in debug['circle_keepouts']):
             warnings.append(f'{edge} edge safe segments adjusted after Edge.Cuts circle keepout subtraction')
-        ordered = sorted_edge_segments(usable, horiz)
-        if len(ordered) > 1:
-            if count > len(ordered):
-                warnings.append(f'STRONG WARNING: Reduced tab count from {count} to {len(ordered)} on {edge}; one tab per safe segment')
-            chosen = [ordered[0]] if count == 1 else [ordered[0], ordered[-1]]
-            for s in chosen[:count]:
-                tab = one_tab_on_segment(s, edge, horiz)
-                if tab: placements.append(tab)
-                else: warnings.append(f'STRONG WARNING: {edge} safe segment {s.length():.2f}mm too short after spacing checks')
-            return
-        s = ordered[0]
-        original_count = count
-        selected_pts = None
-        selected_width = tab_width
-        for width in (tab_width, narrow_width):
-            selected_pts = tab_points_on_segment(s, count, width, horiz)
-            selected_width = width
-            if selected_pts: break
-        if not selected_pts and count > 1:
-            warnings.append(f'STRONG WARNING: Reduced tab count from {original_count} to 1 because segment is too short or keepout blocked on {edge}')
-            count = 1
-            for width in (tab_width, narrow_width):
-                selected_pts = tab_points_on_segment(s, count, width, horiz)
-                selected_width = width
-                if selected_pts: break
-        if not selected_pts:
-            warnings.append(f'STRONG WARNING: {edge} edge segment {s.length():.2f}mm cannot fit even one narrow tab'); return
-        if selected_width != tab_width:
-            warnings.append(f'{edge} edge uses narrow tabs ({selected_width}mm) after spacing checks')
-        for ax, ay, interval in selected_pts:
-            ok, msg = is_clear(ax, ay, selected_width / 2)
-            if not ok:
-                warnings.append(f'{msg} - skipped'); continue
-            placements.append(make_tab(edge, ax, ay, selected_width, interval, horiz))
+        return sorted_edge_segments(usable, horiz)
 
-    place(edges['top'], 'top', tab_top, True)
-    place(edges['bottom'], 'bottom', tab_bot, True)
-    place(edges['left'], 'left', tab_left, False)
-    place(edges['right'], 'right', tab_right, False)
+    def intersect_safe_segments(a: List[LineSegment], b: List[LineSegment], horiz: bool) -> List[Tuple[float, float, float, float]]:
+        result = []
+        for sa in a:
+            alo, ahi, aconst = segment_axis(sa, horiz)
+            for sb in b:
+                blo, bhi, bconst = segment_axis(sb, horiz)
+                lo = max(alo, blo)
+                hi = min(ahi, bhi)
+                if hi - lo >= narrow_width + 2 * end_clearance:
+                    result.append((lo, hi, aconst, bconst))
+        return sorted(result, key=lambda r: r[0])
+
+    def choose_paired_points(intervals: List[Tuple[float, float, float, float]], count: int, label: str
+                             ) -> List[Tuple[float, float, float, float]]:
+        if count <= 0 or not intervals:
+            return []
+        original_count = count
+        selected_width = tab_width
+        usable = []
+        for width in (tab_width, narrow_width):
+            usable = [i for i in intervals if i[1] - i[0] >= width + 2 * end_clearance]
+            selected_width = width
+            if usable:
+                break
+        if not usable:
+            warnings.append(f'STRONG WARNING: {label} has no paired interval long enough for a {narrow_width}mm tab')
+            return []
+        if selected_width != tab_width:
+            warnings.append(f'{label} uses narrow paired tabs ({selected_width}mm) after spacing checks')
+        if count > len(usable) and len(usable) > 1:
+            warnings.append(f'STRONG WARNING: Reduced paired tab count from {count} to {len(usable)} on {label}; one tab per paired interval')
+            count = len(usable)
+        result = []
+        if len(usable) == 1:
+            lo, hi, ca, cb = usable[0]
+            length = hi - lo
+            while count > 0:
+                required = count * selected_width + (count - 1) * min_tab_gap + 2 * end_clearance
+                if length + 1e-9 >= required:
+                    break
+                count -= 1
+            if count < original_count:
+                warnings.append(f'STRONG WARNING: Reduced paired tab count from {original_count} to {count} on {label}; paired interval is too short')
+            if count <= 0:
+                warnings.append(f'STRONG WARNING: {label} cannot fit even one paired narrow tab')
+                return []
+            usable_lo = lo + end_clearance + selected_width / 2
+            usable_hi = hi - end_clearance - selected_width / 2
+            coords = [(usable_lo + usable_hi) / 2] if count == 1 else [
+                usable_lo + i * (usable_hi - usable_lo) / (count - 1) for i in range(count)]
+            result = [(coord, selected_width, ca, cb) for coord in coords]
+        else:
+            chosen = [usable[0]] if count == 1 else [
+                usable[round(i * (len(usable) - 1) / (count - 1))] for i in range(count)]
+            for lo, hi, ca, cb in chosen:
+                coord = (lo + hi) / 2
+                result.append((coord, selected_width, ca, cb))
+        return result
+
+    def add_alignment(edge_a: str, edge_b: str, axis: str, values: List[float]) -> None:
+        rows = []
+        for value in values:
+            rows.append({'first': round(value, 3), 'second': round(value, 3), 'delta': 0.0})
+        debug['alignment_checks'].append({'pair': f'{edge_a}/{edge_b}', 'axis': axis, 'aligned': True, 'pairs': rows})
+
+    def place_paired(edge_a: str, edge_b: str, count_a: int, count_b: int, horiz: bool) -> None:
+        label = f'{edge_a}/{edge_b}'
+        count = min(count_a, count_b)
+        if count_a != count_b:
+            warnings.append(f'STRONG WARNING: Reduced paired tab count on {label} from requested {count_a}/{count_b} to {count}')
+        safe_a = prepare_safe(edges[edge_a], edge_a, horiz)
+        safe_b = prepare_safe(edges[edge_b], edge_b, horiz)
+        intervals = intersect_safe_segments(safe_a, safe_b, horiz)
+        axis = 'x' if horiz else 'y'
+        for lo, hi, ca, cb in intervals:
+            debug['paired_intervals'].append({'pair': label, 'axis': axis, 'start': round(lo, 3),
+                                              'end': round(hi, 3), edge_a: round(ca, 3), edge_b: round(cb, 3),
+                                              'length': round(hi - lo, 3)})
+        if not intervals:
+            warnings.append(f'STRONG WARNING: {label} has no overlapping safe intervals; no unaligned fallback was used')
+            add_alignment(edge_a, edge_b, axis, [])
+            return
+        points = choose_paired_points(intervals, count, label)
+        values = []
+        for coord, width, ca, cb in points:
+            if horiz:
+                a_anchor, b_anchor = (coord, ca), (coord, cb)
+            else:
+                a_anchor, b_anchor = (ca, coord), (cb, coord)
+            ok_a, msg_a = is_clear(a_anchor[0], a_anchor[1], width / 2)
+            ok_b, msg_b = is_clear(b_anchor[0], b_anchor[1], width / 2)
+            if not ok_a or not ok_b:
+                if not ok_a:
+                    warnings.append(f'{msg_a} - skipped paired {label} tab')
+                if not ok_b:
+                    warnings.append(f'{msg_b} - skipped paired {label} tab')
+                continue
+            interval = (coord - width / 2, coord + width / 2)
+            placements.append(make_tab(edge_a, a_anchor[0], a_anchor[1], width, interval, horiz))
+            placements.append(make_tab(edge_b, b_anchor[0], b_anchor[1], width, interval, horiz))
+            values.append(coord)
+        rounded = [round(v, 3) for v in values]
+        if horiz:
+            debug['paired_top_bottom_x'] = rounded
+        else:
+            debug['paired_left_right_y'] = rounded
+        add_alignment(edge_a, edge_b, axis, values)
+        if not values:
+            warnings.append(f'STRONG WARNING: {label} produced no valid paired tabs after clearance checks')
+
+    place_paired('top', 'bottom', tab_top, tab_bot, True)
+    place_paired('left', 'right', tab_left, tab_right, False)
     return placements, warnings, debug
 
 def placements_from_tab_plan(tab_plan: dict, bmin: Point, bmax: Point,
@@ -583,7 +635,7 @@ def insert_tab_footprints(pcb_text: str, placements: List[TabPlacement]) -> str:
     return stripped[:lp] + '\n' + blocks + '\n' + stripped[lp:]
 
 
-# ─── KiKit JSON preset (annotation mode) ────────────────────────────────────
+# KiKit JSON preset (annotation mode)
 
 
 def generate_kikit_preset(rows: int, cols: int,
@@ -602,7 +654,7 @@ def generate_kikit_preset(rows: int, cols: int,
     }
 
 
-# ─── Main orchestration ─────────────────────────────────────────────────────
+# Main orchestration
 
 
 def result_base(input_path: str, rows: int, cols: int, bmin: Point, bmax: Point,
@@ -621,6 +673,10 @@ def result_base(input_path: str, rows: int, cols: int, bmin: Point, bmax: Point,
         'edge_circles': (placement_debug or {}).get('edge_circles', []),
         'circle_keepouts': (placement_debug or {}).get('circle_keepouts', []),
         'safe_segments': (placement_debug or {}).get('safe_segments', []),
+        'paired_intervals': (placement_debug or {}).get('paired_intervals', []),
+        'paired_top_bottom_x': (placement_debug or {}).get('paired_top_bottom_x', []),
+        'paired_left_right_y': (placement_debug or {}).get('paired_left_right_y', []),
+        'alignment_checks': (placement_debug or {}).get('alignment_checks', []),
         'edge_opening_risk': edge_opening_risk,
         'features_detected': [{'kind': f.kind, 'description': f.description,
                                'center': [f.center.x, f.center.y]} for f in features],
@@ -740,7 +796,7 @@ def process_pcb(
     return base
 
 
-# ?????? CLI ????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+# CLI
 
 
 def print_report(r: dict) -> None:
@@ -781,6 +837,24 @@ def print_report(r: dict) -> None:
         print(f'Safe segments after keepout ({len(r.get("safe_segments", []))}):')
         for s in r.get('safe_segments', []):
             print(f'  - {s["edge"]:6s} start={s["start"]} end={s["end"]} len={s["length"]}mm')
+        print()
+
+        print(f'Paired interval sources ({len(r.get("paired_intervals", []))}):')
+        for p in r.get('paired_intervals', []):
+            print(f'  - {p["pair"]:12s} axis={p["axis"]} interval=[{p["start"]}, {p["end"]}] '
+                  f'len={p["length"]}mm')
+        print()
+
+        print(f'Paired top/bottom X positions: {r.get("paired_top_bottom_x", [])}')
+        print(f'Paired left/right Y positions: {r.get("paired_left_right_y", [])}')
+        print()
+
+        print('Alignment checks:')
+        for a in r.get('alignment_checks', []):
+            status = 'OK' if a.get('aligned') else 'FAIL'
+            print(f'  - {a["pair"]} {a["axis"]}: {status}')
+            for pair in a.get('pairs', []):
+                print(f'      {pair["first"]} vs {pair["second"]} delta={pair["delta"]}')
         print()
 
     if r.get('features_detected'):

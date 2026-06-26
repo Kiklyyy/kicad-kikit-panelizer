@@ -19,7 +19,7 @@ Load `references/DEFAULTS.md` when you need exact default values. Load `referenc
 python scripts/panelize.py <input.kicad_pcb> --rows <ROWS> --cols <COLS> --inspect-only
 ```
 
-Inspect-only does not write files. It reports board bbox, Edge.Cuts segments, Edge.Cuts circles, circle keepouts, safe segments, recommended tabs, tab intervals, annotation offset results, and warnings.
+Inspect-only does not write files. It reports board bbox, Edge.Cuts segments, Edge.Cuts circles, circle keepouts, safe segments, paired interval sources, paired top/bottom X positions, paired left/right Y positions, alignment checks, recommended tabs, tab intervals, annotation offset results, and warnings.
 
 Do not skip inspect-only unless the user explicitly asks for fast generation. If warnings mention openings, short edges, holes near edges, connector keepouts, reduced tab counts, or spacing risks, pause and confirm with the user before formal output.
 
@@ -52,8 +52,15 @@ For production work, run small `2x1` and `1x2` tests and visually inspect the re
 - Standard tab width is `3.0mm`; narrow tabs use `1.8mm` by default, with `1.5mm` to `2.2mm` as the recommended narrow range.
 - Parse complete `gr_line`, `gr_arc`, and `gr_circle` blocks, then filter each block for `(layer "Edge.Cuts")`.
 - Treat near-edge Edge.Cuts `gr_circle` holes as keepouts before selecting tabs.
-- On multi-segment edges, prefer safe segment midpoints instead of merging all segments into one span.
-- On short single segments, try standard tabs, then narrow tabs, then reduce tab count with a strong warning.
+- Matrix panel tab planning must use opposite-edge pairing, not independent edge placement.
+- Top and bottom tabs must share the same X coordinates. Left and right tabs must share the same Y coordinates.
+- For top/bottom, compute top safe intervals and bottom safe intervals, then place tabs only in their X-axis intersections.
+- For left/right, compute left safe intervals and right safe intervals, then place tabs only in their Y-axis intersections.
+- For a board with an irregular top edge and a full bottom edge, bottom tabs must follow the top safe X positions. For a board with one irregular side edge and one full side edge, both side tabs must use common safe Y positions.
+- If there are not enough overlapping safe intervals, reduce the paired tab count and warn. If no safe paired point exists, emit a strong warning.
+- Never fall back to unaligned independent edge tab placement.
+- On short paired intervals, try standard tabs, then narrow tabs, then reduce tab count with a strong warning.
+- KiKit panelize success does not prove the mechanical connection locations are reasonable; visually inspect the generated panel in KiCad.
 
 ## Output Checks
 
@@ -65,4 +72,7 @@ After generation, verify:
 - Presets contain `"tabs": {"type": "annotation"}`.
 - `hspace` and `vspace` are unit strings.
 - Top, bottom, left, and right tab rotations are correct.
+- Top and bottom tab X coordinates are paired exactly.
+- Left and right tab Y coordinates are paired exactly.
+- Inspect-only reports paired interval sources and alignment checks.
 - The original PCB hash or modification time did not change.

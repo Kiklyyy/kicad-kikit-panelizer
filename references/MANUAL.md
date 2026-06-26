@@ -7,7 +7,7 @@ This manual describes how to use the KiCad KiKit Panelizer skill and script safe
 1. Confirm the input `.kicad_pcb` path.
 2. Confirm the requested matrix size.
 3. Run inspect-only.
-4. Review bbox, Edge.Cuts segments, Edge.Cuts circles, keepouts, safe segments, recommended tabs, intervals, and warnings.
+4. Review bbox, Edge.Cuts segments, Edge.Cuts circles, keepouts, safe segments, paired interval sources, paired top/bottom X positions, paired left/right Y positions, alignment checks, recommended tabs, intervals, and warnings.
 5. Generate annotation PCB and KiKit JSON presets.
 6. Run KiKit with `-p`.
 7. Visually inspect the output in KiCad before fabrication.
@@ -20,7 +20,14 @@ python scripts/panelize.py path\to\board.kicad_pcb --rows 5 --cols 10 --inspect-
 
 Inspect-only does not write files. It is required before formal output unless the user explicitly asks for fast generation.
 
-Pause for user confirmation if warnings mention openings, short edges, Edge.Cuts circle keepouts, mounting holes near edges, connector keepouts, reduced tab counts, or overlap/spacing risk.
+Pause for user confirmation if warnings mention openings, short edges, Edge.Cuts circle keepouts, mounting holes near edges, connector keepouts, reduced paired tab counts, missing paired intervals, or overlap/spacing risk.
+
+Inspect-only must be used to verify automatic matrix tab alignment:
+
+- `paired top/bottom X positions` lists the X coordinates shared by top and bottom tabs.
+- `paired left/right Y positions` lists the Y coordinates shared by left and right tabs.
+- `alignment checks` should show zero delta for each top/bottom X pair and each left/right Y pair.
+- `paired interval sources` shows which overlapping safe intervals were used.
 
 ## Generate Annotation PCB and Presets
 
@@ -100,16 +107,32 @@ Default values:
 - edge keepout distance: `1.0mm`
 - keepout clearance: `0.5mm`
 
+## Opposite-Edge Pairing
+
+Automatic matrix panel tabs must be planned as opposite-edge pairs:
+
+- Top and bottom tabs share the same X coordinates.
+- Left and right tabs share the same Y coordinates.
+- Top, bottom, left, and right must not independently choose unrelated tab points.
+- For top/bottom, compute safe intervals on both edges and use their X-axis intersections.
+- For left/right, compute safe intervals on both edges and use their Y-axis intersections.
+- If the top edge is irregular and the bottom edge is full length, bottom follows the top safe X positions.
+- If one side edge is irregular and the opposite side is full length, both side tabs use common safe Y positions.
+- If there are not enough overlapping safe intervals, reduce the paired tab count and report the reason.
+- If no safe paired point exists, emit a strong warning. Do not fall back to unaligned independent placement.
+
+KiKit can successfully produce a panel even when the tab locations are mechanically poor. Always visually inspect the generated panel in KiCad, especially for irregular boards, connector recesses, and asymmetric outlines.
+
 ## Short Segments
 
-For multi-segment edges:
+For paired multi-segment edges:
 
-- Prefer safe segment midpoints.
-- Use at most one automatic tab per safe segment.
-- Select standard or narrow width per segment.
-- Do not ignore a narrow-safe segment just because another segment fits standard width.
+- Prefer overlapping safe interval midpoints.
+- Use paired interval intersections, not independent edge midpoints.
+- Select standard or narrow width per paired interval.
+- Do not ignore a narrow paired interval just because another paired interval fits standard width.
 
-For one short safe segment:
+For one short paired safe interval:
 
 1. Try the requested count with standard width.
 2. Try the requested count with narrow width.
@@ -152,4 +175,8 @@ After generation, confirm:
 - JSON contains `"tabs": {"type": "annotation"}`.
 - `hspace` and `vspace` are unit strings such as `"2mm"`.
 - Top, bottom, left, and right rotations are `270`, `90`, `0`, and `180`.
+- Top and bottom tab X coordinates are exactly paired.
+- Left and right tab Y coordinates are exactly paired.
+- Inspect-only alignment checks report zero deltas.
 - Tabs are not inside openings, short transition edges, rounded corners, holes, or connector keepouts.
+- KiKit panelize succeeds and the generated panel is visually inspected in KiCad for aligned mousebite locations.

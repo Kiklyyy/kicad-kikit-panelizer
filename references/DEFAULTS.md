@@ -17,10 +17,10 @@ Use this reference when a parameter value or placement rule is needed.
 | Minimum tab gap | `0.8mm` | Minimum gap between tab intervals on the same segment |
 | Edge circle keepout distance | `1.0mm` | A near-edge Edge.Cuts circle becomes a keepout when within radius plus this distance of the edge |
 | Keepout clearance | `0.5mm` | Extra clearance around a circle keepout interval |
-| Top edge tabs | `2` | Per row-to-row connection when geometry allows |
-| Bottom edge tabs | `2` | Per row-to-row connection when geometry allows |
-| Left edge tabs | `1` | Per column-to-column connection |
-| Right edge tabs | `1` | Per column-to-column connection |
+| Top edge tabs | `2` | Per row-to-row connection when paired top/bottom safe X intervals allow |
+| Bottom edge tabs | `2` | Uses the same X coordinates as top tabs |
+| Left edge tabs | `1` | Per column-to-column connection when paired left/right safe Y intervals allow |
+| Right edge tabs | `1` | Uses the same Y coordinates as left tabs |
 | H/V spacing | `2mm` | JSON length values must include units |
 
 ## Coordinate System
@@ -56,9 +56,15 @@ Annotation footprint origin offset:
 - Ignore non-Edge.Cuts layers such as `Dwgs.User`, `Eco1.User`, and `F.SilkS` for board outline geometry.
 - Treat near-edge Edge.Cuts `gr_circle` holes as keepouts.
 - Place tabs on safe straight segments, not inside notches, slots, rounded transitions, mounting holes, or connector keepouts.
-- On multi-segment top/bottom edges, prefer the leftmost and rightmost safe segment midpoints.
-- Decide standard or narrow width per segment; do not ignore narrow-safe segments just because another segment can fit a standard tab.
-- On one short safe segment, try the requested count with standard width, then narrow width, then reduce count with a strong warning.
+- Use opposite-edge pairing for automatic matrix panel tabs.
+- Top and bottom must share one set of X coordinates. Left and right must share one set of Y coordinates.
+- Do not let top, bottom, left, and right independently choose unrelated tab points.
+- For top/bottom, intersect top safe intervals with bottom safe intervals on the X axis, then choose paired X coordinates from those intersections.
+- For left/right, intersect left safe intervals with right safe intervals on the Y axis, then choose paired Y coordinates from those intersections.
+- If one edge is irregular and the opposite edge is full length, the full edge follows the irregular edge's safe paired coordinates.
+- If there are fewer overlapping intervals than requested tabs, reduce the paired tab count and emit a warning.
+- If no safe paired point exists, emit a strong warning and do not use an unaligned independent-placement fallback.
+- On one short paired interval, try the requested count with standard width, then narrow width, then reduce count with a strong warning.
 
 ## Edge.Cuts Circle Keepouts
 
@@ -87,8 +93,12 @@ Before generation, inspect and report:
 - Mounting holes close to a tab candidate.
 - Board-edge connectors, gold fingers, or keepout-sensitive components.
 - Safe segments shorter than the requested tab count and width allow.
+- Paired top/bottom X positions and whether each pair has zero delta.
+- Paired left/right Y positions and whether each pair has zero delta.
+- Paired interval sources used to choose tab positions.
 - Reduced tab count or narrow tabs.
 - Any strong warning from inspect-only.
+- KiKit panelize success is not enough by itself; visually inspect that mousebites and tabs line up mechanically in KiCad.
 
 ## User Confirmation Template
 
