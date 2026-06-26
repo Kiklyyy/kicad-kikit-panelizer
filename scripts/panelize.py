@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-panelize.py — KiCad PCB tab annotator and KiKit preset generator.
+panelize.py - KiCad PCB tab annotator and KiKit preset generator.
 
 Reads a .kicad_pcb, extracts Edge.Cuts boundary, detects edge features,
 inserts real kikit:Tab footprints as text-level safe edits, and emits
@@ -320,7 +320,8 @@ def compute_tab_placements(
     warnings: List[str] = []
     debug = {'edge_circles': [], 'circle_keepouts': [], 'safe_segments': [],
              'paired_intervals': [], 'paired_top_bottom_x': [],
-             'paired_left_right_y': [], 'alignment_checks': []}
+             'paired_left_right_y': [], 'alignment_checks': [],
+             'paired_candidates': []}
 
     for c in circles:
         debug['edge_circles'].append({'center': [round(c.center.x, 3), round(c.center.y, 3)], 'radius': round(c.radius, 3)})
@@ -333,6 +334,20 @@ def compute_tab_placements(
                 return False, (f'Tab anchor at ({x:.1f},{y:.1f}) near {f.description} '
                                f'({f.center.x:.1f},{f.center.y:.1f}) {d:.1f}<{md:.1f}mm')
         return True, ''
+
+    def feature_clearance(x: float, y: float, hw: float) -> Tuple[bool, float, str]:
+        min_delta = float('inf')
+        nearest = ''
+        for f in features:
+            d = math.hypot(x - f.center.x, y - f.center.y)
+            md = feat_margin + f.radius + hw
+            delta = d - md
+            if delta < min_delta:
+                min_delta = delta
+                nearest = f'{f.description} d={d:.1f} clear={md:.1f}'
+        if min_delta == float('inf'):
+            return True, 999.0, ''
+        return min_delta >= 0, min_delta, nearest
 
     def sorted_edge_segments(edge_segs: List[LineSegment], horiz: bool) -> List[LineSegment]:
         return sorted(edge_segs, key=lambda s: min(s.p1.x, s.p2.x) if horiz else min(s.p1.y, s.p2.y))
@@ -391,6 +406,17 @@ def compute_tab_placements(
         const = (s.p1.y + s.p2.y) / 2 if horiz else (s.p1.x + s.p2.x) / 2
         return lo, hi, const
 
+    def opening_axis_distance(coord: float, horiz: bool) -> float:
+        distances = []
+        for s in edges.get('other', []):
+            lo = min(s.p1.x, s.p2.x) if horiz else min(s.p1.y, s.p2.y)
+            hi = max(s.p1.x, s.p2.x) if horiz else max(s.p1.y, s.p2.y)
+            if lo - 1.0 <= coord <= hi + 1.0:
+                distances.append(0.0)
+            else:
+                distances.append(min(abs(coord - lo), abs(coord - hi)))
+        return min(distances) if distances else 999.0
+
     def prepare_safe(edge_segs: List[LineSegment], edge: str, horiz: bool) -> List[LineSegment]:
         if not edge_segs:
             warnings.append(f'No {edge} edge segments found')
@@ -416,10 +442,29 @@ def compute_tab_placements(
                     result.append((lo, hi, aconst, bconst))
         return sorted(result, key=lambda r: r[0])
 
-    def choose_paired_points(intervals: List[Tuple[float, float, float, float]], count: int, label: str
-                             ) -> List[Tuple[float, float, float, float]]:
-        if count <= 0 or not intervals:
+    def interval_candidate_coords(lo: float, hi: float, width: float) -> List[float]:
+        usable_lo = lo + end_clearance + width / 2
+        usable_hi = hi - end_clearance - width / 2
+        if usable_hi + 1e-9 < usable_lo:
             return []
+        raw = [
+            usable_lo,
+            lo + (hi - lo) * 0.25,
+            (lo + hi) / 2,
+            lo + (hi - lo) * 0.75,
+            usable_hi,
+        ]
+        result = []
+        for coord in raw:
+            coord = min(max(coord, usable_lo), usable_hi)
+            if all(abs(coord - seen) > 0.001 for seen in result):
+                result.append(coord)
+        return result
+
+    def choose_paired_candidates(intervals: List[Tuple[float, float, float, float]], count: int, label: str, horiz: bool
+                                 ) -> Tuple[List[dict], int]:
+        if count <= 0 or not intervals:
+            return [], 0
         original_count = count
         selected_width = tab_width
         usable = []
@@ -430,13 +475,12 @@ def compute_tab_placements(
                 break
         if not usable:
             warnings.append(f'STRONG WARNING: {label} has no paired interval long enough for a {narrow_width}mm tab')
-            return []
+            return [], 0
         if selected_width != tab_width:
             warnings.append(f'{label} uses narrow paired tabs ({selected_width}mm) after spacing checks')
         if count > len(usable) and len(usable) > 1:
             warnings.append(f'STRONG WARNING: Reduced paired tab count from {count} to {len(usable)} on {label}; one tab per paired interval')
             count = len(usable)
-        result = []
         if len(usable) == 1:
             lo, hi, ca, cb = usable[0]
             length = hi - lo
@@ -449,19 +493,61 @@ def compute_tab_placements(
                 warnings.append(f'STRONG WARNING: Reduced paired tab count from {original_count} to {count} on {label}; paired interval is too short')
             if count <= 0:
                 warnings.append(f'STRONG WARNING: {label} cannot fit even one paired narrow tab')
-                return []
-            usable_lo = lo + end_clearance + selected_width / 2
-            usable_hi = hi - end_clearance - selected_width / 2
-            coords = [(usable_lo + usable_hi) / 2] if count == 1 else [
-                usable_lo + i * (usable_hi - usable_lo) / (count - 1) for i in range(count)]
-            result = [(coord, selected_width, ca, cb) for coord in coords]
-        else:
-            chosen = [usable[0]] if count == 1 else [
-                usable[round(i * (len(usable) - 1) / (count - 1))] for i in range(count)]
-            for lo, hi, ca, cb in chosen:
-                coord = (lo + hi) / 2
-                result.append((coord, selected_width, ca, cb))
-        return result
+                return [], 0
+
+        candidates = []
+        for index, (lo, hi, ca, cb) in enumerate(usable):
+            for coord in interval_candidate_coords(lo, hi, selected_width):
+                if horiz:
+                    anchors = [(coord, ca), (coord, cb)]
+                else:
+                    anchors = [(ca, coord), (cb, coord)]
+                clearances = [feature_clearance(x, y, selected_width / 2) for x, y in anchors]
+                feature_ok = all(c[0] for c in clearances)
+                feature_margin = min(c[1] for c in clearances) if clearances else 999.0
+                nearest = min((c[2] for c in clearances if c[2]), default='')
+                opening_distance = opening_axis_distance(coord, horiz)
+                board_min = bmin.x if horiz else bmin.y
+                board_max = bmax.x if horiz else bmax.y
+                board_center = (board_min + board_max) / 2
+                board_span = max(board_max - board_min, 1.0)
+                center_distance = abs(coord - board_center)
+                center_score = max(0.0, board_span / 2 - center_distance)
+                interval_length = hi - lo
+                edge_margin = min(abs(coord - board_min), abs(board_max - coord))
+                extreme_limit = board_span * 0.18
+                extreme_penalty = max(0.0, extreme_limit - edge_margin)
+                score = 0.0
+                if feature_ok:
+                    score += 10000.0
+                score += min(feature_margin, 50.0) * 5.0
+                score += min(opening_distance, 25.0) * 10.0
+                score += min(interval_length, 35.0) * 18.0
+                score += center_score * 8.0
+                score += min(edge_margin, 25.0) * 4.0
+                score -= extreme_penalty * 35.0
+                candidate = {
+                    'pair': label,
+                    'axis': 'x' if horiz else 'y',
+                    'coord': coord,
+                    'width': selected_width,
+                    'interval': (lo, hi),
+                    'const_a': ca,
+                    'const_b': cb,
+                    'feature_ok': feature_ok,
+                    'feature_margin': feature_margin,
+                    'nearest_feature': nearest,
+                    'opening_distance': opening_distance,
+                    'center_distance': center_distance,
+                    'interval_length': interval_length,
+                    'edge_margin': edge_margin,
+                    'score': score,
+                    'reason': 'candidate',
+                    'interval_index': index,
+                }
+                candidates.append(candidate)
+        candidates.sort(key=lambda c: c['score'], reverse=True)
+        return candidates, count
 
     def add_alignment(edge_a: str, edge_b: str, axis: str, values: List[float]) -> None:
         rows = []
@@ -486,9 +572,14 @@ def compute_tab_placements(
             warnings.append(f'STRONG WARNING: {label} has no overlapping safe intervals; no unaligned fallback was used')
             add_alignment(edge_a, edge_b, axis, [])
             return
-        points = choose_paired_points(intervals, count, label)
+        candidates, count = choose_paired_candidates(intervals, count, label, horiz)
         values = []
-        for coord, width, ca, cb in points:
+        selected = []
+        for cand in candidates:
+            coord = cand['coord']
+            width = cand['width']
+            ca = cand['const_a']
+            cb = cand['const_b']
             if horiz:
                 a_anchor, b_anchor = (coord, ca), (coord, cb)
             else:
@@ -496,15 +587,40 @@ def compute_tab_placements(
             ok_a, msg_a = is_clear(a_anchor[0], a_anchor[1], width / 2)
             ok_b, msg_b = is_clear(b_anchor[0], b_anchor[1], width / 2)
             if not ok_a or not ok_b:
+                cand['reason'] = 'skipped: feature clearance'
                 if not ok_a:
                     warnings.append(f'{msg_a} - skipped paired {label} tab')
                 if not ok_b:
                     warnings.append(f'{msg_b} - skipped paired {label} tab')
                 continue
+            if any(abs(coord - used['coord']) < width + min_tab_gap for used in selected):
+                cand['reason'] = 'skipped: too close to selected paired tab'
+                continue
+            if any(cand['interval_index'] == used['interval_index'] for used in selected):
+                cand['reason'] = 'skipped: interval already has selected paired tab'
+                continue
+            cand['reason'] = 'selected'
             interval = (coord - width / 2, coord + width / 2)
             placements.append(make_tab(edge_a, a_anchor[0], a_anchor[1], width, interval, horiz))
             placements.append(make_tab(edge_b, b_anchor[0], b_anchor[1], width, interval, horiz))
             values.append(coord)
+            selected.append(cand)
+            if len(selected) >= count:
+                break
+        for cand in candidates:
+            debug['paired_candidates'].append({
+                'pair': cand['pair'],
+                'axis': cand['axis'],
+                'coord': round(cand['coord'], 3),
+                'interval': [round(cand['interval'][0], 3), round(cand['interval'][1], 3)],
+                'width': cand['width'],
+                'feature_ok': cand['feature_ok'],
+                'feature_margin': round(cand['feature_margin'], 3),
+                'nearest_feature': cand['nearest_feature'],
+                'opening_distance': round(cand['opening_distance'], 3),
+                'score': round(cand['score'], 3),
+                'reason': cand['reason'],
+            })
         rounded = [round(v, 3) for v in values]
         if horiz:
             debug['paired_top_bottom_x'] = rounded
@@ -512,7 +628,7 @@ def compute_tab_placements(
             debug['paired_left_right_y'] = rounded
         add_alignment(edge_a, edge_b, axis, values)
         if not values:
-            warnings.append(f'STRONG WARNING: {label} produced no valid paired tabs after clearance checks')
+            warnings.append(f'STRONG WARNING: {label} produced no valid paired tabs after clearance checks; use manual --tab-plan if this edge must be connected')
 
     place_paired('top', 'bottom', tab_top, tab_bot, True)
     place_paired('left', 'right', tab_left, tab_right, False)
@@ -642,13 +758,19 @@ def generate_kikit_preset(rows: int, cols: int,
                           drill: float = 0.4, spacing: float = 0.7,
                           offset: float = -0.15, prolong: float = 0.6,
                           frame_width: float = 5.0,
-                          hspace: float = 2.0, vspace: float = 2.0) -> dict:
+                          hspace: float = 2.0, vspace: float = 2.0,
+                          framing: str = "railstb") -> dict:
+    framing_section = {"type": framing, "width": f"{frame_width}mm", "cuts": "both"}
+    if framing in ("railslr", "frame"):
+        framing_section["hspace"] = f"{hspace:g}mm"
+    if framing in ("railstb", "frame"):
+        framing_section["vspace"] = f"{vspace:g}mm"
     return {
         "layout": {"rows": rows, "cols": cols, "hspace": f"{hspace:g}mm", "vspace": f"{vspace:g}mm"},
         "tabs": {"type": "annotation"},
         "cuts": {"type": "mousebites", "drill": f"{drill}mm", "spacing": f"{spacing}mm",
                  "offset": f"{offset}mm", "prolong": f"{prolong}mm"},
-        "framing": {"type": "railstb", "width": f"{frame_width}mm", "cuts": "both"},
+        "framing": framing_section,
         "tooling": {"type": "3hole", "hoffset": "2.5mm", "voffset": "2.5mm", "size": "3.2mm"},
         "post": {"millradius": "0.5mm"},
     }
@@ -676,6 +798,7 @@ def result_base(input_path: str, rows: int, cols: int, bmin: Point, bmax: Point,
         'paired_intervals': (placement_debug or {}).get('paired_intervals', []),
         'paired_top_bottom_x': (placement_debug or {}).get('paired_top_bottom_x', []),
         'paired_left_right_y': (placement_debug or {}).get('paired_left_right_y', []),
+        'paired_candidates': (placement_debug or {}).get('paired_candidates', []),
         'alignment_checks': (placement_debug or {}).get('alignment_checks', []),
         'edge_opening_risk': edge_opening_risk,
         'features_detected': [{'kind': f.kind, 'description': f.description,
@@ -702,6 +825,7 @@ def process_pcb(
     offset: float = -0.15, prolong: float = 0.6,
     output_dir: Optional[str] = None,
     prefix: Optional[str] = None,
+    framing: str = "railstb",
     inspect_only: bool = False,
     tab_plan: Optional[dict] = None,
     annotation_offset: float = 0.5,
@@ -761,6 +885,7 @@ def process_pcb(
                        placements, warnings, edge_opening_risk, inspect_only=inspect_only,
                        placement_debug=placement_debug)
     base['output_dir'] = out_dir
+    base['framing'] = framing
     if inspect_only:
         return base
 
@@ -780,11 +905,11 @@ def process_pcb(
             json.dump(preset, f, indent=2)
         return p
 
-    full = generate_kikit_preset(rows, cols, drill=drill, spacing=spacing, offset=offset, prolong=prolong)
+    full = generate_kikit_preset(rows, cols, drill=drill, spacing=spacing, offset=offset, prolong=prolong, framing=framing)
     fj = write_json(f'{basename}_panel_{rows}x{cols}.json', full)
-    t21 = generate_kikit_preset(2, 1, drill=drill, spacing=spacing, offset=offset, prolong=prolong)
+    t21 = generate_kikit_preset(2, 1, drill=drill, spacing=spacing, offset=offset, prolong=prolong, framing=framing)
     t21j = write_json(f'{basename}_test_2x1.json', t21)
-    t12 = generate_kikit_preset(1, 2, drill=drill, spacing=spacing, offset=offset, prolong=prolong)
+    t12 = generate_kikit_preset(1, 2, drill=drill, spacing=spacing, offset=offset, prolong=prolong, framing=framing)
     t12j = write_json(f'{basename}_test_1x2.json', t12)
 
     base.update({
@@ -857,6 +982,16 @@ def print_report(r: dict) -> None:
                 print(f'      {pair["first"]} vs {pair["second"]} delta={pair["delta"]}')
         print()
 
+        print(f'Paired candidate evaluation ({len(r.get("paired_candidates", []))}):')
+        for c in r.get('paired_candidates', []):
+            print(f'  - {c["pair"]:12s} {c["axis"]}={c["coord"]} interval={c["interval"]} '
+                  f'w={c["width"]} feature_ok={c["feature_ok"]} '
+                  f'feature_margin={c["feature_margin"]} opening_dist={c["opening_distance"]} '
+                  f'score={c["score"]} reason={c["reason"]}')
+            if c.get('nearest_feature'):
+                print(f'      nearest feature: {c["nearest_feature"]}')
+        print()
+
     if r.get('features_detected'):
         print('Edge features:')
         for f in r['features_detected']:
@@ -915,6 +1050,8 @@ def main():
     ap.add_argument('--prolong', type=float, default=0.6)
     ap.add_argument('--output-dir', type=str, default=None)
     ap.add_argument('--prefix', type=str, default=None)
+    ap.add_argument('--framing', choices=['railstb', 'railslr', 'frame'], default='railstb',
+                    help='KiKit framing type: railstb, railslr, or frame')
     ap.add_argument('--inspect-only', action='store_true', help='Only print detection results; do not write PCB or JSON files')
     ap.add_argument('--tab-plan', type=str, default=None, help='Manual tab plan JSON string or path to a JSON file')
     ap.add_argument('--annotation-offset', type=float, default=0.5, help='Move kikit:Tab footprint origin outside the board edge by this many mm')
@@ -928,6 +1065,7 @@ def main():
         drill=args.drill, spacing=args.spacing,
         offset=args.offset, prolong=args.prolong,
         output_dir=args.output_dir, prefix=args.prefix,
+        framing=args.framing,
         inspect_only=args.inspect_only,
         tab_plan=load_tab_plan(args.tab_plan),
         annotation_offset=args.annotation_offset)
@@ -939,3 +1077,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

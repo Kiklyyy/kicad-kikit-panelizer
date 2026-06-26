@@ -1,4 +1,4 @@
-﻿# Defaults and Edge-Case Rules
+# Defaults and Edge-Case Rules
 
 Use this reference when a parameter value or placement rule is needed.
 
@@ -22,6 +22,7 @@ Use this reference when a parameter value or placement rule is needed.
 | Left edge tabs | `1` | Per column-to-column connection when paired left/right safe Y intervals allow |
 | Right edge tabs | `1` | Uses the same Y coordinates as left tabs |
 | H/V spacing | `2mm` | JSON length values must include units |
+| Framing | `railstb` | Default preserves old top/bottom rail behavior; use `railslr` for left/right rails and `frame` for a full four-side frame |
 
 ## Coordinate System
 
@@ -65,6 +66,21 @@ Annotation footprint origin offset:
 - If there are fewer overlapping intervals than requested tabs, reduce the paired tab count and emit a warning.
 - If no safe paired point exists, emit a strong warning and do not use an unaligned independent-placement fallback.
 - On one short paired interval, try the requested count with standard width, then narrow width, then reduce count with a strong warning.
+- Enumerate multiple paired candidates from paired intervals instead of choosing only the first interval or midpoint.
+- If a candidate fails feature clearance, continue to the next paired candidate.
+- Candidate scoring can prefer good feature clearance, distance from internal openings/cutouts, longer paired intervals, board-center placement, and avoidance of extreme board edges.
+- Candidate scoring must not break top/bottom X pairing or left/right Y pairing, and must not use an unaligned fallback.
+- Inspect-only should report paired candidate evaluation with selected and skipped reasons.
+
+## Framing Defaults
+
+Supported framing values are:
+
+- `railstb`: top/bottom rails, the default for backward compatibility.
+- `railslr`: left/right rails.
+- `frame`: full four-side frame.
+
+Use `--framing frame` when a complete outside frame is needed. A successful KiKit panelize run still requires KiCad visual inspection of tab and mousebite locations.
 
 ## Edge.Cuts Circle Keepouts
 
@@ -96,9 +112,12 @@ Before generation, inspect and report:
 - Paired top/bottom X positions and whether each pair has zero delta.
 - Paired left/right Y positions and whether each pair has zero delta.
 - Paired interval sources used to choose tab positions.
+- Paired candidate evaluation, including selected/skipped reasons and feature-clearance failures.
 - Reduced tab count or narrow tabs.
 - Any strong warning from inspect-only.
 - KiKit panelize success is not enough by itself; visually inspect that mousebites and tabs line up mechanically in KiCad.
+- For complex irregular boards, known production layouts, connector-heavy edges, large cutouts, slots, or engineer-preferred tab locations, use manual `--tab-plan` as an override. Manual plans do not mean automatic scoring should force the same position.
+- For long narrow irregular boards, if automatic connector avoidance places side tabs in an undesirable location, use a manual tab plan to specify the preferred middle connection and combine it with `--framing frame` when a full four-side frame is required.
 
 ## User Confirmation Template
 

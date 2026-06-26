@@ -1,4 +1,4 @@
-﻿---
+---
 name: kicad-kikit-panelizer
 description: Panelize KiCad PCB files by adding real KiKit annotation tabs and generating KiKit JSON presets. Use when working with .kicad_pcb files that need mousebite panelization, inspect-only geometry checks, Type-C or USB opening handling, Edge.Cuts circle keepouts, short-edge tab reduction, or KiKit annotation-mode presets.
 ---
@@ -16,17 +16,17 @@ Load `references/DEFAULTS.md` when you need exact default values. Load `referenc
 3. Always run inspect-only before generating production files:
 
 ```bash
-python scripts/panelize.py <input.kicad_pcb> --rows <ROWS> --cols <COLS> --inspect-only
+python scripts/panelize.py <input.kicad_pcb> --rows <ROWS> --cols <COLS> [--framing railstb|railslr|frame] --inspect-only
 ```
 
-Inspect-only does not write files. It reports board bbox, Edge.Cuts segments, Edge.Cuts circles, circle keepouts, safe segments, paired interval sources, paired top/bottom X positions, paired left/right Y positions, alignment checks, recommended tabs, tab intervals, annotation offset results, and warnings.
+Inspect-only does not write files. It reports board bbox, Edge.Cuts segments, Edge.Cuts circles, circle keepouts, safe segments, paired interval sources, paired candidate evaluation, paired top/bottom X positions, paired left/right Y positions, alignment checks, recommended tabs, tab intervals, annotation offset results, and warnings.
 
 Do not skip inspect-only unless the user explicitly asks for fast generation. If warnings mention openings, short edges, holes near edges, connector keepouts, reduced tab counts, or spacing risks, pause and confirm with the user before formal output.
 
 4. Generate annotation PCB and presets only after inspect-only looks reasonable:
 
 ```bash
-python scripts/panelize.py <input.kicad_pcb> --rows <ROWS> --cols <COLS>
+python scripts/panelize.py <input.kicad_pcb> --rows <ROWS> --cols <COLS> [--framing railstb|railslr|frame]
 ```
 
 5. Run KiKit 1.8+ with `-p`:
@@ -60,6 +60,13 @@ For production work, run small `2x1` and `1x2` tests and visually inspect the re
 - If there are not enough overlapping safe intervals, reduce the paired tab count and warn. If no safe paired point exists, emit a strong warning.
 - Never fall back to unaligned independent edge tab placement.
 - On short paired intervals, try standard tabs, then narrow tabs, then reduce tab count with a strong warning.
+- Automatic placement must enumerate multiple paired candidates from paired intervals instead of using only the first interval or midpoint.
+- Candidate scoring may prefer feature clearance, opening/cutout distance, longer stable intervals, and board-center placement, but it must preserve top/bottom X pairing and left/right Y pairing.
+- If a paired candidate fails feature clearance, try the next paired candidate. Never use an unaligned fallback.
+- Inspect-only must show paired candidate evaluation so the user can see selected/skipped reasons.
+- `--framing` controls KiKit framing: `railstb` is the default, `railslr` creates left/right rails, and `frame` creates a full four-side frame. Full frames still require KiCad visual inspection.
+- Use manual `--tab-plan` for complex irregular boards, boards with proven production tab locations, or automatic placements that are valid but mechanically undesirable. Manual plans are engineer overrides and do not imply the automatic algorithm must choose the same location.
+- For long narrow irregular boards, if automatic connector avoidance produces an unnatural side-tab location, specify the preferred middle connection in a manual tab plan and use `--framing frame` when a full four-side frame is needed.
 - KiKit panelize success does not prove the mechanical connection locations are reasonable; visually inspect the generated panel in KiCad.
 
 ## Output Checks
@@ -74,5 +81,5 @@ After generation, verify:
 - Top, bottom, left, and right tab rotations are correct.
 - Top and bottom tab X coordinates are paired exactly.
 - Left and right tab Y coordinates are paired exactly.
-- Inspect-only reports paired interval sources and alignment checks.
+- Inspect-only reports paired interval sources, paired candidate evaluation, selected/skipped reasons, and alignment checks.
 - The original PCB hash or modification time did not change.

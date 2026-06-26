@@ -1,4 +1,4 @@
-﻿# Operating Manual
+# Operating Manual
 
 This manual describes how to use the KiCad KiKit Panelizer skill and script safely.
 
@@ -7,7 +7,7 @@ This manual describes how to use the KiCad KiKit Panelizer skill and script safe
 1. Confirm the input `.kicad_pcb` path.
 2. Confirm the requested matrix size.
 3. Run inspect-only.
-4. Review bbox, Edge.Cuts segments, Edge.Cuts circles, keepouts, safe segments, paired interval sources, paired top/bottom X positions, paired left/right Y positions, alignment checks, recommended tabs, intervals, and warnings.
+4. Review bbox, Edge.Cuts segments, Edge.Cuts circles, keepouts, safe segments, paired interval sources, paired candidate evaluation, paired top/bottom X positions, paired left/right Y positions, alignment checks, recommended tabs, intervals, and warnings.
 5. Generate annotation PCB and KiKit JSON presets.
 6. Run KiKit with `-p`.
 7. Visually inspect the output in KiCad before fabrication.
@@ -15,7 +15,7 @@ This manual describes how to use the KiCad KiKit Panelizer skill and script safe
 ## Inspect First
 
 ```powershell
-python scripts/panelize.py path\to\board.kicad_pcb --rows 5 --cols 10 --inspect-only
+python scripts/panelize.py path\to\board.kicad_pcb --rows 5 --cols 10 --framing railstb --inspect-only
 ```
 
 Inspect-only does not write files. It is required before formal output unless the user explicitly asks for fast generation.
@@ -28,11 +28,12 @@ Inspect-only must be used to verify automatic matrix tab alignment:
 - `paired left/right Y positions` lists the Y coordinates shared by left and right tabs.
 - `alignment checks` should show zero delta for each top/bottom X pair and each left/right Y pair.
 - `paired interval sources` shows which overlapping safe intervals were used.
+- `paired candidate evaluation` shows each candidate coordinate, source interval, clearance result, score, and selected/skipped reason.
 
 ## Generate Annotation PCB and Presets
 
 ```powershell
-python scripts/panelize.py path\to\board.kicad_pcb --rows 5 --cols 10
+python scripts/panelize.py path\to\board.kicad_pcb --rows 5 --cols 10 --framing railstb
 ```
 
 Expected output files:
@@ -43,6 +44,22 @@ Expected output files:
 - `panel_output/board_panel_5x10.json`
 
 The original PCB is not modified.
+
+## Framing
+
+Use `--framing` to choose the KiKit frame style written into the preset:
+
+```powershell
+python scripts/panelize.py path\to\board.kicad_pcb --rows 2 --cols 2 --framing frame
+```
+
+Supported values:
+
+- `railstb`: top/bottom rails, default for backward compatibility.
+- `railslr`: left/right rails.
+- `frame`: complete four-side frame.
+
+A full frame is useful when the panel needs outside support on all sides, but it does not replace KiCad visual inspection.
 
 ## Run KiKit 1.8+
 
@@ -123,6 +140,19 @@ Automatic matrix panel tabs must be planned as opposite-edge pairs:
 
 KiKit can successfully produce a panel even when the tab locations are mechanically poor. Always visually inspect the generated panel in KiCad, especially for irregular boards, connector recesses, and asymmetric outlines.
 
+## Candidate Evaluation
+
+Automatic placement evaluates multiple paired candidates instead of using only the first interval or the midpoint of an interval.
+
+Candidate evaluation must preserve these invariants:
+
+- Top/bottom candidates share one X coordinate.
+- Left/right candidates share one Y coordinate.
+- If a candidate fails feature clearance, the next paired candidate is tried.
+- There is no unaligned fallback.
+
+Scoring may consider connector clearance, internal Edge.Cuts opening/cutout risk, longer paired intervals, board-center preference, and extreme-edge penalties. Inspect-only prints selected and skipped reasons so the user can decide whether automatic placement is mechanically acceptable.
+
 ## Short Segments
 
 For paired multi-segment edges:
@@ -152,7 +182,11 @@ Default spacing checks:
 
 ## Manual Tab Plan
 
-Use `--tab-plan` when automatic placement is not appropriate:
+Use `--tab-plan` when automatic placement is not appropriate. Good cases include complex irregular boards, boards with proven production tab locations, connector-heavy edges, large cutouts, slots, mounting holes, or automatic results that are valid but mechanically undesirable. A manual tab plan is an engineer override; it does not mean the automatic algorithm must force the same location.
+
+For long narrow irregular boards, if automatic connector avoidance moves side tabs away from the preferred production location, specify the preferred middle side connection manually and use `--framing frame` when a full four-side frame is required.
+
+Use `--tab-plan` like this:
 
 ```json
 {
@@ -178,5 +212,6 @@ After generation, confirm:
 - Top and bottom tab X coordinates are exactly paired.
 - Left and right tab Y coordinates are exactly paired.
 - Inspect-only alignment checks report zero deltas.
+- Inspect-only candidate evaluation explains selected/skipped tab positions.
 - Tabs are not inside openings, short transition edges, rounded corners, holes, or connector keepouts.
 - KiKit panelize succeeds and the generated panel is visually inspected in KiCad for aligned mousebite locations.
