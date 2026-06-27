@@ -776,6 +776,85 @@ def generate_kikit_preset(rows: int, cols: int,
     }
 
 
+def ps_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def generate_windows_runner(out_dir: str, basename: str, rows: int, cols: int,
+                            ann_path: str, preset_full: str,
+                            preset_test_2x1: str, preset_test_1x2: str) -> str:
+    runner_path = os.path.join(out_dir, 'run_kikit_panelize.ps1')
+    ann_name = os.path.basename(ann_path)
+    full_name = os.path.basename(preset_full)
+    test_2x1_name = os.path.basename(preset_test_2x1)
+    test_1x2_name = os.path.basename(preset_test_1x2)
+    full_label = f'{rows}x{cols}'
+    full_output = f'{basename}_panel_{rows}x{cols}.kicad_pcb'
+    lines = [
+        '$ErrorActionPreference = "Stop"',
+        'Set-Location $PSScriptRoot',
+        '',
+        'function Resolve-KiKit {',
+        '    if ($env:KIKIT_EXE -and (Test-Path -LiteralPath $env:KIKIT_EXE)) {',
+        '        return (Resolve-Path -LiteralPath $env:KIKIT_EXE).Path',
+        '    }',
+        '',
+        '    $candidates = @(',
+        '        "D:\\kicad_908\\bin\\Scripts\\kikit.exe",',
+        '        "D:\\KiCad\\9.0\\bin\\Scripts\\kikit.exe",',
+        '        "C:\\Program Files\\KiCad\\9.0\\bin\\Scripts\\kikit.exe",',
+        '        "C:\\Program Files\\KiCad\\8.0\\bin\\Scripts\\kikit.exe"',
+        '    )',
+        '    foreach ($candidate in $candidates) {',
+        '        if (Test-Path -LiteralPath $candidate) {',
+        '            return (Resolve-Path -LiteralPath $candidate).Path',
+        '        }',
+        '    }',
+        '',
+        '    $cmd = Get-Command kikit.exe -ErrorAction SilentlyContinue',
+        '    if ($cmd) { return $cmd.Source }',
+        '    $cmd = Get-Command kikit -ErrorAction SilentlyContinue',
+        '    if ($cmd) { return $cmd.Source }',
+        '',
+        '    throw "Could not find kikit.exe. Please install KiCad + KiKit or set KIKIT_EXE, for example: `$env:KIKIT_EXE = `"D:\\KiCad\\9.0\\bin\\Scripts\\kikit.exe`""',
+        '}',
+        '',
+        'function Require-File([string]$Path) {',
+        '    if (-not (Test-Path -LiteralPath $Path)) {',
+        '        throw "Required file not found: $Path"',
+        '    }',
+        '}',
+        '',
+        '$annotationPcb = Join-Path $PSScriptRoot ' + ps_single_quote(ann_name),
+        '$preset2x1 = Join-Path $PSScriptRoot ' + ps_single_quote(test_2x1_name),
+        '$preset1x2 = Join-Path $PSScriptRoot ' + ps_single_quote(test_1x2_name),
+        '$presetFull = Join-Path $PSScriptRoot ' + ps_single_quote(full_name),
+        '',
+        'Require-File $annotationPcb',
+        'Require-File $preset2x1',
+        'Require-File $preset1x2',
+        'Require-File $presetFull',
+        '',
+        '$kikit = Resolve-KiKit',
+        'Write-Host "Using KiKit: $kikit"',
+        '',
+        'Write-Host "Running 2x1..."',
+        '& $kikit panelize -p $preset2x1 $annotationPcb (Join-Path $PSScriptRoot ' + ps_single_quote(f'{basename}_panel_2x1.kicad_pcb') + ')',
+        '',
+        'Write-Host "Running 1x2..."',
+        '& $kikit panelize -p $preset1x2 $annotationPcb (Join-Path $PSScriptRoot ' + ps_single_quote(f'{basename}_panel_1x2.kicad_pcb') + ')',
+        '',
+        f'Write-Host "Running {full_label}..."',
+        '& $kikit panelize -p $presetFull $annotationPcb (Join-Path $PSScriptRoot ' + ps_single_quote(full_output) + ')',
+        '',
+        'Write-Host "Done."',
+        'Write-Host "Please open the final panel in KiCad for visual inspection."',
+        '',
+    ]
+    with open(runner_path, 'w', encoding='utf-8', newline='\r\n') as f:
+        f.write('\n'.join(lines))
+    return runner_path
+
 # Main orchestration
 
 
@@ -829,6 +908,7 @@ def process_pcb(
     inspect_only: bool = False,
     tab_plan: Optional[dict] = None,
     annotation_offset: float = 0.5,
+    generate_runner: bool = True,
 ) -> dict:
     input_path = os.path.abspath(input_path)
     if not os.path.isfile(input_path):
@@ -911,12 +991,16 @@ def process_pcb(
     t21j = write_json(f'{basename}_test_2x1.json', t21)
     t12 = generate_kikit_preset(1, 2, drill=drill, spacing=spacing, offset=offset, prolong=prolong, framing=framing)
     t12j = write_json(f'{basename}_test_1x2.json', t12)
+    runner_ps1 = None
+    if generate_runner:
+        runner_ps1 = generate_windows_runner(out_dir, basename, rows, cols, ann_path, fj, t21j, t12j)
 
     base.update({
         'annotated_pcb': ann_path,
         'preset_full': fj,
         'preset_test_2x1': t21j,
         'preset_test_1x2': t12j,
+        'runner_ps1': runner_ps1,
     })
     return base
 
@@ -1023,6 +1107,8 @@ def print_report(r: dict) -> None:
     print(f'  Preset:   {r["preset_full"]}')
     print(f'  Test 2x1: {r["preset_test_2x1"]}')
     print(f'  Test 1x2: {r["preset_test_1x2"]}')
+    if r.get('runner_ps1'):
+        print(f'  Runner:   {r["runner_ps1"]}')
     print()
     print('All presets use annotation mode.')
     print()
@@ -1030,6 +1116,10 @@ def print_report(r: dict) -> None:
     print(f'  kikit panelize -p {r["preset_full"]} {r["annotated_pcb"]} panel_full.kicad_pcb')
     print(f'  kikit panelize -p {r["preset_test_2x1"]} {r["annotated_pcb"]} test_2x1.kicad_pcb')
     print(f'  kikit panelize -p {r["preset_test_1x2"]} {r["annotated_pcb"]} test_1x2.kicad_pcb')
+    if r.get('runner_ps1'):
+        print()
+        print('On Windows, you can run:')
+        print('  powershell -ExecutionPolicy Bypass -File .\\run_kikit_panelize.ps1')
     print('=' * 60)
 
 
@@ -1055,6 +1145,7 @@ def main():
     ap.add_argument('--inspect-only', action='store_true', help='Only print detection results; do not write PCB or JSON files')
     ap.add_argument('--tab-plan', type=str, default=None, help='Manual tab plan JSON string or path to a JSON file')
     ap.add_argument('--annotation-offset', type=float, default=0.5, help='Move kikit:Tab footprint origin outside the board edge by this many mm')
+    ap.add_argument('--no-runner', action='store_true', help='Do not generate run_kikit_panelize.ps1')
     args = ap.parse_args()
 
     r = process_pcb(
@@ -1068,7 +1159,8 @@ def main():
         framing=args.framing,
         inspect_only=args.inspect_only,
         tab_plan=load_tab_plan(args.tab_plan),
-        annotation_offset=args.annotation_offset)
+        annotation_offset=args.annotation_offset,
+        generate_runner=not args.no_runner)
 
     print_report(r)
     if r.get('error'):

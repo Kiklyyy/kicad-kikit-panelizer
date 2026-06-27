@@ -42,6 +42,7 @@ Expected output files:
 - `panel_output/board_test_2x1.json`
 - `panel_output/board_test_1x2.json`
 - `panel_output/board_panel_5x10.json`
+- `panel_output/run_kikit_panelize.ps1`
 
 The original PCB is not modified.
 
@@ -60,6 +61,49 @@ Supported values:
 - `frame`: complete four-side frame.
 
 A full frame is useful when the panel needs outside support on all sides, but it does not replace KiCad visual inspection.
+
+
+## Windows PowerShell Runner
+
+The script writes `run_kikit_panelize.ps1` by default when generating annotation and preset files. Use `--no-runner` to skip it. Inspect-only does not write files and never creates a runner.
+
+This runner is useful when an agent is running in Mimo, Claude Code, a Linux VM, or another environment that cannot directly call Windows KiCad `.exe` files. The agent can generate the annotation PCB and JSON presets, then the user can run KiKit from Windows PowerShell.
+
+Recommended command:
+
+```powershell
+cd panel_output
+powershell -ExecutionPolicy Bypass -File .un_kikit_panelize.ps1
+```
+
+Alternative for the current process:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.un_kikit_panelize.ps1
+```
+
+To force a KiKit path:
+
+```powershell
+$env:KIKIT_EXE = "D:\KiCad\9.0in\Scripts\kikit.exe"
+```
+
+The runner resolves KiKit in this order: `KIKIT_EXE`, common Windows KiCad script paths, `Get-Command kikit.exe`, then `Get-Command kikit`. It checks the annotation PCB plus the full, `2x1`, and `1x2` preset JSON files before running.
+
+The runner uses KiKit 1.8+ syntax:
+
+```powershell
+kikit panelize -p <preset.json> <annotation_pcb.kicad_pcb> <output_panel.kicad_pcb>
+```
+
+It writes:
+
+- `<basename>_panel_2x1.kicad_pcb`
+- `<basename>_panel_1x2.kicad_pcb`
+- `<basename>_panel_<rows>x<cols>.kicad_pcb`
+
+The runner only runs KiKit panelize. It does not modify the original PCB. Generated panels still require KiCad visual inspection, and KiKit success does not mean the panel is ready for production.
 
 ## Run KiKit 1.8+
 
@@ -185,6 +229,43 @@ Default spacing checks:
 Use `--tab-plan` when automatic placement is not appropriate. Good cases include complex irregular boards, boards with proven production tab locations, connector-heavy edges, large cutouts, slots, mounting holes, or automatic results that are valid but mechanically undesirable. A manual tab plan is an engineer override; it does not mean the automatic algorithm must force the same location.
 
 For long narrow irregular boards, if automatic connector avoidance moves side tabs away from the preferred production location, specify the preferred middle side connection manually and use `--framing frame` when a full four-side frame is required.
+
+
+When the user describes tab coordinates in natural language, the agent should create the tab-plan JSON automatically. The user does not need to hand-write `tab_plan.json`.
+
+Example user request: "Put two top/bottom tabs at X=87.4 and X=121.5; put the left/right tabs at Y=109.2; use 2.2mm width for the left/right tabs."
+
+Agent-created `manual_tab_plan.json`:
+
+```json
+{
+  "tabs": [
+    {"edge": "top", "x": 87.4, "width": 3.0},
+    {"edge": "bottom", "x": 87.4, "width": 3.0},
+    {"edge": "top", "x": 121.5, "width": 3.0},
+    {"edge": "bottom", "x": 121.5, "width": 3.0},
+    {"edge": "left", "y": 109.2, "width": 2.2},
+    {"edge": "right", "y": 109.2, "width": 2.2}
+  ]
+}
+```
+
+Then rerun:
+
+```powershell
+python scripts\panelize.py path	ooard.kicad_pcb --rows 2 --cols 2 --framing frame --tab-plan panel_output\manual_tab_plan.json --output-dir panel_output
+```
+
+Natural-language tab-plan rules:
+
+- Top/bottom use X coordinates.
+- Left/right use Y coordinates.
+- Top and bottom must be paired with the same X values.
+- Left and right must be paired with the same Y values.
+- If only left/right width is specified, apply it only to left/right; keep top/bottom at default `3.0mm`.
+- If no width is specified, use default `3.0mm`.
+- Manual tab plans are engineer overrides and still require KiCad visual inspection.
+- KiKit success does not mean the panel is ready for production.
 
 Use `--tab-plan` like this:
 

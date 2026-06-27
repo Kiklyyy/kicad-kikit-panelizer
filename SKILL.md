@@ -69,6 +69,73 @@ For production work, run small `2x1` and `1x2` tests and visually inspect the re
 - For long narrow irregular boards, if automatic connector avoidance produces an unnatural side-tab location, specify the preferred middle connection in a manual tab plan and use `--framing frame` when a full four-side frame is needed.
 - KiKit panelize success does not prove the mechanical connection locations are reasonable; visually inspect the generated panel in KiCad.
 
+
+## Natural-Language Manual Tab Plans
+
+When a user describes preferred tab coordinates in natural language, do not ask them to hand-write JSON. Convert the request into a `tab_plan.json` file in the output directory, then rerun `scripts/panelize.py` with `--tab-plan`.
+
+Example user request: "Put two top/bottom tabs at X=87.4 and X=121.5; put the left/right tabs at Y=109.2; use 2.2mm width for the left/right tabs."
+
+The agent should create a file such as `manual_tab_plan.json`:
+
+```json
+{
+  "tabs": [
+    {"edge": "top", "x": 87.4, "width": 3.0},
+    {"edge": "bottom", "x": 87.4, "width": 3.0},
+    {"edge": "top", "x": 121.5, "width": 3.0},
+    {"edge": "bottom", "x": 121.5, "width": 3.0},
+    {"edge": "left", "y": 109.2, "width": 2.2},
+    {"edge": "right", "y": 109.2, "width": 2.2}
+  ]
+}
+```
+
+Then rerun:
+
+```bash
+python scripts/panelize.py <input.kicad_pcb> --rows <ROWS> --cols <COLS> --framing <railstb|railslr|frame> --tab-plan <output_dir>/manual_tab_plan.json --output-dir <output_dir>
+```
+
+Rules for natural-language tab plans:
+
+- Top/bottom tabs use X coordinates.
+- Left/right tabs use Y coordinates.
+- Top and bottom must be paired with the same X values.
+- Left and right must be paired with the same Y values.
+- If the user only says left/right width is `2.2mm`, apply `2.2` only to left/right and keep top/bottom at the default `3.0mm`.
+- If no width is specified, use `3.0mm`.
+- Manual tab plans are engineer overrides; they still require KiCad visual inspection.
+- KiKit success does not mean the panel is ready for production.
+
+## Windows KiKit Runner
+
+Generation also writes `run_kikit_panelize.ps1` by default. Use `--no-runner` to suppress it. Inspect-only never writes files and never writes the runner.
+
+For Mimo, Claude Code, Linux VMs, or other environments that cannot directly call Windows KiCad executables, the agent can generate the annotation PCB, JSON presets, and `run_kikit_panelize.ps1`; the user can then run the PowerShell script on Windows.
+
+Recommended Windows command:
+
+```powershell
+cd <output_dir>
+powershell -ExecutionPolicy Bypass -File .un_kikit_panelize.ps1
+```
+
+Alternative:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.un_kikit_panelize.ps1
+```
+
+The runner finds KiKit by checking `KIKIT_EXE`, common KiCad Windows paths, then `Get-Command kikit.exe` and `Get-Command kikit`. To force a path:
+
+```powershell
+$env:KIKIT_EXE = "D:\KiCad\9.0in\Scripts\kikit.exe"
+```
+
+The runner only runs KiKit panelize for `2x1`, `1x2`, and the requested full panel. It does not modify the original PCB. Generated panels still need KiCad visual inspection; KiKit success does not mean the panel is ready for production.
+
 ## Output Checks
 
 After generation, verify:

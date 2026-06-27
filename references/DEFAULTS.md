@@ -100,6 +100,59 @@ if abs(circle_center_x - edge_x) <= radius + edge_keepout_distance:
               circle_center_y + radius + keepout_clearance]
 ```
 
+
+## Manual Tab-Plan Defaults
+
+When a user specifies tab coordinates in natural language, the agent should create a JSON tab plan for them instead of asking the user to write JSON manually.
+
+Coordinate rules:
+
+- Top/bottom use X coordinates.
+- Left/right use Y coordinates.
+- Top and bottom must be paired with identical X values.
+- Left and right must be paired with identical Y values.
+- Width defaults to `3.0mm` when unspecified.
+- If the user specifies a width only for left/right tabs, apply it only to left/right and leave top/bottom at `3.0mm`.
+- Manual tab plans are engineer overrides and still require KiCad visual inspection.
+- KiKit panelize success does not prove the panel is ready for production.
+
+Example generated `manual_tab_plan.json`:
+
+```json
+{
+  "tabs": [
+    {"edge": "top", "x": 87.4, "width": 3.0},
+    {"edge": "bottom", "x": 87.4, "width": 3.0},
+    {"edge": "top", "x": 121.5, "width": 3.0},
+    {"edge": "bottom", "x": 121.5, "width": 3.0},
+    {"edge": "left", "y": 109.2, "width": 2.2},
+    {"edge": "right", "y": 109.2, "width": 2.2}
+  ]
+}
+```
+
+## Windows Runner Defaults
+
+Non-inspect generation writes `run_kikit_panelize.ps1` by default unless `--no-runner` is used. Inspect-only never writes output files and never writes the runner.
+
+The runner uses `$PSScriptRoot`, sets `$ErrorActionPreference = "Stop"`, verifies the annotation PCB and all three preset JSON files exist, then runs KiKit 1.8+ with `-p` for `2x1`, `1x2`, and the requested full panel.
+
+KiKit lookup order:
+
+1. Valid `$env:KIKIT_EXE`.
+2. `D:\kicad_908in\Scripts\kikit.exe`.
+3. `D:\KiCad\9.0in\Scripts\kikit.exe`.
+4. `C:\Program Files\KiCad\9.0in\Scripts\kikit.exe`.
+5. `C:\Program Files\KiCad\8.0in\Scripts\kikit.exe`.
+6. `Get-Command kikit.exe`.
+7. `Get-Command kikit`.
+
+If KiKit is not found, the runner must clearly report `Could not find kikit.exe` and ask the user to install KiCad + KiKit or set `KIKIT_EXE`, for example:
+
+```powershell
+$env:KIKIT_EXE = "D:\KiCad\9.0in\Scripts\kikit.exe"
+```
+
 ## Risk Checklist
 
 Before generation, inspect and report:
