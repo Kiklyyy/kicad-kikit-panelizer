@@ -35,7 +35,18 @@ python scripts/panelize.py <input.kicad_pcb> --rows <ROWS> --cols <COLS> [--fram
 kikit panelize -p <preset.json> <annotation_pcb.kicad_pcb> <output_panel.kicad_pcb>
 ```
 
-For production work, run small `2x1` and `1x2` tests and visually inspect the result in KiCad before a full panel.
+By default, generation writes only the requested full panel preset. For debugging or extra confidence, add `--include-smoke-tests` to also generate `2x1` and `1x2` smoke-test presets and include them in the runner. Always visually inspect the generated panel in KiCad before fabrication.
+
+## Simple Output Defaults
+
+Default generation writes only:
+
+- `<basename>_annotation_tabs.kicad_pcb`
+- `<basename>_panel_<rows>x<cols>.json`
+- `run_kikit_panelize.ps1`
+- `run_kikit_panelize.bat`
+
+It does not write `2x1` or `1x2` smoke-test presets unless the user passes `--include-smoke-tests`. With `--include-smoke-tests`, generation also writes `<basename>_test_2x1.json` and `<basename>_test_1x2.json`, and the runner also produces `<basename>_panel_2x1.kicad_pcb` and `<basename>_panel_1x2.kicad_pcb` before the full panel.
 
 ## Core Rules
 
@@ -110,7 +121,7 @@ Rules for natural-language tab plans:
 
 ## Windows KiKit Runner
 
-Generation also writes `run_kikit_panelize.ps1` by default. Use `--no-runner` to suppress it. Inspect-only never writes files and never writes the runner.
+Generation writes `run_kikit_panelize.ps1` and `run_kikit_panelize.bat` by default. Use `--no-runner` to suppress both. Inspect-only never writes files and never writes either runner. By default the runner only panelizes the requested full panel; add `--include-smoke-tests` to include `2x1` and `1x2` smoke panels.
 
 For Mimo, Claude Code, Linux VMs, or other environments that cannot directly call Windows KiCad executables, the agent can generate the annotation PCB, JSON presets, and `run_kikit_panelize.ps1`; the user can then run the PowerShell script on Windows.
 
@@ -118,14 +129,16 @@ Recommended Windows command:
 
 ```powershell
 cd <output_dir>
-powershell -ExecutionPolicy Bypass -File .un_kikit_panelize.ps1
+powershell -ExecutionPolicy Bypass -File .
+un_kikit_panelize.ps1
 ```
 
 Alternative:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.un_kikit_panelize.ps1
+.
+un_kikit_panelize.ps1
 ```
 
 The runner finds KiKit by checking `KIKIT_EXE`, common KiCad Windows paths, then `Get-Command kikit.exe` and `Get-Command kikit`. To force a path:
@@ -134,7 +147,7 @@ The runner finds KiKit by checking `KIKIT_EXE`, common KiCad Windows paths, then
 $env:KIKIT_EXE = "D:\KiCad\9.0in\Scripts\kikit.exe"
 ```
 
-The runner only runs KiKit panelize for `2x1`, `1x2`, and the requested full panel. It does not modify the original PCB. Generated panels still need KiCad visual inspection; KiKit success does not mean the panel is ready for production.
+The `.bat` file only calls the `.ps1`; the `.ps1` contains the KiKit lookup and panelize logic. The runner does not modify the original PCB. Generated panels still need KiCad visual inspection; KiKit success does not mean the panel is ready for production.
 
 ## Output Checks
 

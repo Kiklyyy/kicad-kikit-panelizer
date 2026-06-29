@@ -131,11 +131,27 @@ Example generated `manual_tab_plan.json`:
 }
 ```
 
+## Output File Defaults
+
+Default non-inspect output is intentionally small for ordinary users:
+
+- `<basename>_annotation_tabs.kicad_pcb`
+- `<basename>_panel_<rows>x<cols>.json`
+- `run_kikit_panelize.ps1`
+- `run_kikit_panelize.bat`
+
+`--include-smoke-tests` additionally writes:
+
+- `<basename>_test_2x1.json`
+- `<basename>_test_1x2.json`
+
+`--no-runner` disables both runner files. Inspect-only writes no files.
+
 ## Windows Runner Defaults
 
-Non-inspect generation writes `run_kikit_panelize.ps1` by default unless `--no-runner` is used. Inspect-only never writes output files and never writes the runner.
+Non-inspect generation writes `run_kikit_panelize.ps1` and `run_kikit_panelize.bat` by default unless `--no-runner` is used. Inspect-only never writes output files and never writes either runner.
 
-The runner uses `$PSScriptRoot`, sets `$ErrorActionPreference = "Stop"`, verifies the annotation PCB and all three preset JSON files exist, then runs KiKit 1.8+ with `-p` for `2x1`, `1x2`, and the requested full panel.
+Default generation only writes the requested full panel preset. It does not write `2x1` or `1x2` smoke-test presets unless `--include-smoke-tests` is used. The runner uses `$PSScriptRoot`, sets `$ErrorActionPreference = "Stop"`, verifies the annotation PCB and required preset JSON files exist, then runs KiKit 1.8+ with `-p`. By default it runs only the full panel; with `--include-smoke-tests`, it runs `2x1`, `1x2`, and the requested full panel.
 
 KiKit lookup order:
 
@@ -147,7 +163,7 @@ KiKit lookup order:
 6. `Get-Command kikit.exe`.
 7. `Get-Command kikit`.
 
-If KiKit is not found, the runner must clearly report `Could not find kikit.exe` and ask the user to install KiCad + KiKit or set `KIKIT_EXE`, for example:
+The `.bat` runner is for double-click use and only calls the `.ps1`; it deliberately pauses at the end so ordinary Windows users can read the result. Automation should call the `.ps1` directly. If KiKit is not found, the PowerShell runner must clearly report `Could not find kikit.exe` and ask the user to install KiCad + KiKit or set `KIKIT_EXE`, for example:
 
 ```powershell
 $env:KIKIT_EXE = "D:\KiCad\9.0in\Scripts\kikit.exe"

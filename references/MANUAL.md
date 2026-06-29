@@ -36,15 +36,14 @@ Inspect-only must be used to verify automatic matrix tab alignment:
 python scripts/panelize.py path\to\board.kicad_pcb --rows 5 --cols 10 --framing railstb
 ```
 
-Expected output files:
+Expected default output files:
 
 - `panel_output/board_annotation_tabs.kicad_pcb`
-- `panel_output/board_test_2x1.json`
-- `panel_output/board_test_1x2.json`
 - `panel_output/board_panel_5x10.json`
 - `panel_output/run_kikit_panelize.ps1`
+- `panel_output/run_kikit_panelize.bat`
 
-The original PCB is not modified.
+The original PCB is not modified. Default output does not include `2x1` or `1x2` smoke-test presets. Add `--include-smoke-tests` when you want those debugging presets and runner steps.
 
 ## Framing
 
@@ -65,7 +64,7 @@ A full frame is useful when the panel needs outside support on all sides, but it
 
 ## Windows PowerShell Runner
 
-The script writes `run_kikit_panelize.ps1` by default when generating annotation and preset files. Use `--no-runner` to skip it. Inspect-only does not write files and never creates a runner.
+The script writes `run_kikit_panelize.ps1` and `run_kikit_panelize.bat` by default when generating annotation and preset files. Use `--no-runner` to skip both. Inspect-only does not write files and never creates a runner. By default the runner only produces the requested full panel; add `--include-smoke-tests` to also run `2x1` and `1x2` smoke panels.
 
 This runner is useful when an agent is running in Mimo, Claude Code, a Linux VM, or another environment that cannot directly call Windows KiCad `.exe` files. The agent can generate the annotation PCB and JSON presets, then the user can run KiKit from Windows PowerShell.
 
@@ -73,14 +72,16 @@ Recommended command:
 
 ```powershell
 cd panel_output
-powershell -ExecutionPolicy Bypass -File .un_kikit_panelize.ps1
+powershell -ExecutionPolicy Bypass -File .
+un_kikit_panelize.ps1
 ```
 
 Alternative for the current process:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.un_kikit_panelize.ps1
+.
+un_kikit_panelize.ps1
 ```
 
 To force a KiKit path:
@@ -97,13 +98,28 @@ The runner uses KiKit 1.8+ syntax:
 kikit panelize -p <preset.json> <annotation_pcb.kicad_pcb> <output_panel.kicad_pcb>
 ```
 
-It writes:
+By default it writes only:
+
+- `<basename>_panel_<rows>x<cols>.kicad_pcb`
+
+With `--include-smoke-tests`, it also writes:
 
 - `<basename>_panel_2x1.kicad_pcb`
 - `<basename>_panel_1x2.kicad_pcb`
-- `<basename>_panel_<rows>x<cols>.kicad_pcb`
 
-The runner only runs KiKit panelize. It does not modify the original PCB. Generated panels still require KiCad visual inspection, and KiKit success does not mean the panel is ready for production.
+The `.bat` file only calls the `.ps1`; it does not duplicate KiKit lookup logic. The runner only runs KiKit panelize. It does not modify the original PCB. Generated panels still require KiCad visual inspection, and KiKit success does not mean the panel is ready for production.
+
+## Smoke-Test Presets
+
+Default generation no longer writes `2x1` and `1x2` smoke-test presets. For ordinary users, the output directory contains only the annotation PCB, the requested full panel preset, and the Windows runners.
+
+Use `--include-smoke-tests` when debugging tab geometry or when you explicitly want small `2x1` and `1x2` KiKit runs before the full panel:
+
+```powershell
+python scripts\panelize.py path	ooard.kicad_pcb --rows 5 --cols 10 --framing frame --include-smoke-tests
+```
+
+With smoke tests enabled, the runner will produce `2x1`, `1x2`, and the requested full panel. Without it, the runner only produces the full panel.
 
 ## Run KiKit 1.8+
 

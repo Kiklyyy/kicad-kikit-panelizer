@@ -782,14 +782,15 @@ def ps_single_quote(value: str) -> str:
 
 def generate_windows_runner(out_dir: str, basename: str, rows: int, cols: int,
                             ann_path: str, preset_full: str,
-                            preset_test_2x1: str, preset_test_1x2: str) -> str:
-    runner_path = os.path.join(out_dir, 'run_kikit_panelize.ps1')
+                            preset_test_2x1: Optional[str] = None,
+                            preset_test_1x2: Optional[str] = None) -> Tuple[str, str]:
+    runner_ps1 = os.path.join(out_dir, 'run_kikit_panelize.ps1')
+    runner_bat = os.path.join(out_dir, 'run_kikit_panelize.bat')
     ann_name = os.path.basename(ann_path)
     full_name = os.path.basename(preset_full)
-    test_2x1_name = os.path.basename(preset_test_2x1)
-    test_1x2_name = os.path.basename(preset_test_1x2)
     full_label = f'{rows}x{cols}'
     full_output = f'{basename}_panel_{rows}x{cols}.kicad_pcb'
+    include_smoke_tests = bool(preset_test_2x1 and preset_test_1x2)
     lines = [
         '$ErrorActionPreference = "Stop"',
         'Set-Location $PSScriptRoot',
@@ -826,34 +827,62 @@ def generate_windows_runner(out_dir: str, basename: str, rows: int, cols: int,
         '}',
         '',
         '$annotationPcb = Join-Path $PSScriptRoot ' + ps_single_quote(ann_name),
-        '$preset2x1 = Join-Path $PSScriptRoot ' + ps_single_quote(test_2x1_name),
-        '$preset1x2 = Join-Path $PSScriptRoot ' + ps_single_quote(test_1x2_name),
         '$presetFull = Join-Path $PSScriptRoot ' + ps_single_quote(full_name),
-        '',
-        'Require-File $annotationPcb',
-        'Require-File $preset2x1',
-        'Require-File $preset1x2',
-        'Require-File $presetFull',
-        '',
-        '$kikit = Resolve-KiKit',
-        'Write-Host "Using KiKit: $kikit"',
-        '',
-        'Write-Host "Running 2x1..."',
-        '& $kikit panelize -p $preset2x1 $annotationPcb (Join-Path $PSScriptRoot ' + ps_single_quote(f'{basename}_panel_2x1.kicad_pcb') + ')',
-        '',
-        'Write-Host "Running 1x2..."',
-        '& $kikit panelize -p $preset1x2 $annotationPcb (Join-Path $PSScriptRoot ' + ps_single_quote(f'{basename}_panel_1x2.kicad_pcb') + ')',
-        '',
+    ]
+    if include_smoke_tests:
+        lines.extend([
+            '$preset2x1 = Join-Path $PSScriptRoot ' + ps_single_quote(os.path.basename(preset_test_2x1 or '')),
+            '$preset1x2 = Join-Path $PSScriptRoot ' + ps_single_quote(os.path.basename(preset_test_1x2 or '')),
+        ])
+    lines.extend(['', 'Require-File $annotationPcb', 'Require-File $presetFull'])
+    if include_smoke_tests:
+        lines.extend(['Require-File $preset2x1', 'Require-File $preset1x2'])
+    lines.extend(['', '$kikit = Resolve-KiKit', 'Write-Host "Using KiKit: $kikit"', ''])
+    if include_smoke_tests:
+        lines.extend([
+            'Write-Host "Running 2x1..."',
+            '& $kikit panelize -p $preset2x1 $annotationPcb (Join-Path $PSScriptRoot ' + ps_single_quote(f'{basename}_panel_2x1.kicad_pcb') + ')',
+            '',
+            'Write-Host "Running 1x2..."',
+            '& $kikit panelize -p $preset1x2 $annotationPcb (Join-Path $PSScriptRoot ' + ps_single_quote(f'{basename}_panel_1x2.kicad_pcb') + ')',
+            '',
+        ])
+    lines.extend([
         f'Write-Host "Running {full_label}..."',
         '& $kikit panelize -p $presetFull $annotationPcb (Join-Path $PSScriptRoot ' + ps_single_quote(full_output) + ')',
         '',
         'Write-Host "Done."',
         'Write-Host "Please open the final panel in KiCad for visual inspection."',
         '',
-    ]
-    with open(runner_path, 'w', encoding='utf-8', newline='\r\n') as f:
+    ])
+    with open(runner_ps1, 'w', encoding='utf-8', newline='\r\n') as f:
         f.write('\n'.join(lines))
-    return runner_path
+
+    bat_lines = [
+        '@echo off',
+        'setlocal',
+        'cd /d "%~dp0"',
+        'echo Running KiKit panelize from:',
+        'echo %CD%',
+        'echo.',
+        'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run_kikit_panelize.ps1"',
+        'set EXITCODE=%ERRORLEVEL%',
+        'echo.',
+        'if %EXITCODE% EQU 0 (',
+        'echo Done. Please open the generated panel PCB in KiCad for visual inspection.',
+        ') else (',
+        'echo Failed with exit code %EXITCODE%.',
+        ')',
+        'echo.',
+        'echo Press any key to close...',
+        'pause >nul',
+        'exit /b %EXITCODE%',
+        '',
+    ]
+    with open(runner_bat, 'w', encoding='utf-8', newline='\r\n') as f:
+        f.write('\n'.join(bat_lines))
+    return runner_ps1, runner_bat
+
 
 # Main orchestration
 
@@ -909,6 +938,7 @@ def process_pcb(
     tab_plan: Optional[dict] = None,
     annotation_offset: float = 0.5,
     generate_runner: bool = True,
+    include_smoke_tests: bool = False,
 ) -> dict:
     input_path = os.path.abspath(input_path)
     if not os.path.isfile(input_path):
@@ -987,13 +1017,17 @@ def process_pcb(
 
     full = generate_kikit_preset(rows, cols, drill=drill, spacing=spacing, offset=offset, prolong=prolong, framing=framing)
     fj = write_json(f'{basename}_panel_{rows}x{cols}.json', full)
-    t21 = generate_kikit_preset(2, 1, drill=drill, spacing=spacing, offset=offset, prolong=prolong, framing=framing)
-    t21j = write_json(f'{basename}_test_2x1.json', t21)
-    t12 = generate_kikit_preset(1, 2, drill=drill, spacing=spacing, offset=offset, prolong=prolong, framing=framing)
-    t12j = write_json(f'{basename}_test_1x2.json', t12)
+    t21j = None
+    t12j = None
+    if include_smoke_tests:
+        t21 = generate_kikit_preset(2, 1, drill=drill, spacing=spacing, offset=offset, prolong=prolong, framing=framing)
+        t21j = write_json(f'{basename}_test_2x1.json', t21)
+        t12 = generate_kikit_preset(1, 2, drill=drill, spacing=spacing, offset=offset, prolong=prolong, framing=framing)
+        t12j = write_json(f'{basename}_test_1x2.json', t12)
     runner_ps1 = None
+    runner_bat = None
     if generate_runner:
-        runner_ps1 = generate_windows_runner(out_dir, basename, rows, cols, ann_path, fj, t21j, t12j)
+        runner_ps1, runner_bat = generate_windows_runner(out_dir, basename, rows, cols, ann_path, fj, t21j, t12j)
 
     base.update({
         'annotated_pcb': ann_path,
@@ -1001,6 +1035,8 @@ def process_pcb(
         'preset_test_2x1': t21j,
         'preset_test_1x2': t12j,
         'runner_ps1': runner_ps1,
+        'runner_bat': runner_bat,
+        'include_smoke_tests': include_smoke_tests,
     })
     return base
 
@@ -1103,22 +1139,30 @@ def print_report(r: dict) -> None:
         return
 
     print('Output:')
-    print(f'  PCB:      {r["annotated_pcb"]}')
-    print(f'  Preset:   {r["preset_full"]}')
-    print(f'  Test 2x1: {r["preset_test_2x1"]}')
-    print(f'  Test 1x2: {r["preset_test_1x2"]}')
+    print(f'  PCB:        {r["annotated_pcb"]}')
+    print(f'  Preset:     {r["preset_full"]}')
+    if r.get('include_smoke_tests'):
+        print(f'  Test 2x1:   {r["preset_test_2x1"]}')
+        print(f'  Test 1x2:   {r["preset_test_1x2"]}')
     if r.get('runner_ps1'):
-        print(f'  Runner:   {r["runner_ps1"]}')
+        print(f'  Runner PS1: {r["runner_ps1"]}')
+    if r.get('runner_bat'):
+        print(f'  Runner BAT: {r["runner_bat"]}')
     print()
     print('All presets use annotation mode.')
     print()
     print('KiKit commands:')
+    if r.get('include_smoke_tests'):
+        print(f'  kikit panelize -p {r["preset_test_2x1"]} {r["annotated_pcb"]} {Path(r["preset_test_2x1"]).stem.replace("_test_2x1", "_panel_2x1")}.kicad_pcb')
+        print(f'  kikit panelize -p {r["preset_test_1x2"]} {r["annotated_pcb"]} {Path(r["preset_test_1x2"]).stem.replace("_test_1x2", "_panel_1x2")}.kicad_pcb')
     print(f'  kikit panelize -p {r["preset_full"]} {r["annotated_pcb"]} panel_full.kicad_pcb')
-    print(f'  kikit panelize -p {r["preset_test_2x1"]} {r["annotated_pcb"]} test_2x1.kicad_pcb')
-    print(f'  kikit panelize -p {r["preset_test_1x2"]} {r["annotated_pcb"]} test_1x2.kicad_pcb')
     if r.get('runner_ps1'):
         print()
-        print('On Windows, you can run:')
+        if r.get('runner_bat'):
+            print('Windows users can double-click:')
+            print('  run_kikit_panelize.bat')
+            print()
+        print('Or run PowerShell manually:')
         print('  powershell -ExecutionPolicy Bypass -File .\\run_kikit_panelize.ps1')
     print('=' * 60)
 
@@ -1145,7 +1189,8 @@ def main():
     ap.add_argument('--inspect-only', action='store_true', help='Only print detection results; do not write PCB or JSON files')
     ap.add_argument('--tab-plan', type=str, default=None, help='Manual tab plan JSON string or path to a JSON file')
     ap.add_argument('--annotation-offset', type=float, default=0.5, help='Move kikit:Tab footprint origin outside the board edge by this many mm')
-    ap.add_argument('--no-runner', action='store_true', help='Do not generate run_kikit_panelize.ps1')
+    ap.add_argument('--no-runner', action='store_true', help='Do not generate run_kikit_panelize.ps1 or run_kikit_panelize.bat')
+    ap.add_argument('--include-smoke-tests', action='store_true', help='Also generate 2x1 and 1x2 smoke-test presets and include them in the runner')
     args = ap.parse_args()
 
     r = process_pcb(
@@ -1160,7 +1205,8 @@ def main():
         inspect_only=args.inspect_only,
         tab_plan=load_tab_plan(args.tab_plan),
         annotation_offset=args.annotation_offset,
-        generate_runner=not args.no_runner)
+        generate_runner=not args.no_runner,
+        include_smoke_tests=args.include_smoke_tests)
 
     print_report(r)
     if r.get('error'):
