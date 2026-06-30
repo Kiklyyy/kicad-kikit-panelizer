@@ -2,44 +2,31 @@
 
 # KiCad KiKit Panelizer
 
-用于 KiCad / KiKit 的拼版辅助工具，可为 `.kicad_pcb` 文件添加 KiKit annotation Tab，并生成 KiKit panelize JSON preset。
-
-本项目用于辅助 PCB 拼版准备工作。它不会替代工程师审查，也不能保证输出文件可以直接用于生产。正式投板前，应在 KiCad 中检查 annotation PCB 和 KiKit 生成的 panel PCB，并结合板厂工艺规范确认邮票孔、连接筋、禁布区和装配空间。
+KiCad KiKit Panelizer 是一个 Codex/ChatGPT Skill 和 Python 工具，用于把 KiCad `.kicad_pcb` 单板准备成 KiKit annotation-mode 拼版输入。它会在 PCB 副本中插入真实的 `footprint "kikit:Tab"` annotation，生成 KiKit JSON preset，并生成 Windows runner，方便用户最终运行 KiKit panelize。
 
 当前版本：`v0.1.0-beta`
 
-## 功能特性
+## 工具用途
 
-- 读取 KiCad `.kicad_pcb` 文件，并在副本中插入 KiKit annotation Tab。
+适用于需要 mousebite / 邮票孔拼版、希望先做几何预检查、并使用 KiKit annotation Tab 控制连接筋位置的 KiCad PCB。
+
+核心行为：
+
+- 不覆盖原始 `.kicad_pcb`。
 - 插入真实 KiCad footprint：`footprint "kikit:Tab"`。
-- 删除旧的 `footprint "kikit:Tab"` 和 `footprint "PCM_kikit:Tab"` 后再生成新 annotation。
-- 生成 KiKit panelize JSON preset，并使用 annotation 模式：`"tabs": {"type": "annotation"}`。
-- 支持 mousebite / 邮票孔拼版。
-- 支持矩阵拼版，包含上下连接和左右连接。
-- 按完整 `gr_line`、`gr_arc`、`gr_circle` block 解析 Edge.Cuts，避免误读其他图层。
-- 支持 Edge.Cuts 圆孔 keepout，将靠近板边的圆孔从可用 Tab 区域中扣除。
-- 支持 Type-C 凹槽、USB 边缘开口、短边等风险场景的检查和避让。
-- 支持 `--inspect-only`，在不写文件的情况下输出几何检查结果。
-- 支持 `--tab-plan`，允许手动指定 Tab 坐标和宽度。
-- 默认将 annotation footprint 原点向板外偏移，降低 KiKit 判断 annotation 位于板内的风险。
-- 不覆盖原始 PCB 文件。
-
-## 适用场景
-
-本工具适用于以下场景：
-
-- 使用 KiCad 设计 PCB，并使用 KiKit 进行 panelize。
-- 需要通过 KiKit annotation Tab 控制 mousebite / 邮票孔位置。
-- 需要生成 2x1、1x2 或 NxM 矩阵拼版 preset。
-- 板边存在 Type-C、USB、槽口、开口、圆孔或较短边，需要先检查 Tab 风险。
-- 希望在正式 KiKit panelize 前，先得到 bbox、Edge.Cuts segment、keepout 和 recommended tabs 等检查结果。
-
-不建议将本工具视为自动生产工具。它是拼版辅助和预检查工具，最终输出必须经过工程师和板厂工艺规范确认。
+- 插入新 Tab 前会删除旧的 `footprint "kikit:Tab"` 和 `footprint "PCM_kikit:Tab"`。
+- 生成 KiKit annotation mode JSON：`"tabs": {"type": "annotation"}`。
+- 支持异形板、凹槽、Type-C / USB 开口、短边、Edge.Cuts 圆孔 keepout。
+- 矩阵拼版使用 paired tab placement：top/bottom 共用 X 坐标，left/right 共用 Y 坐标。
+- inspect-only 会输出 safe segments、paired intervals、candidate evaluation、selected/skipped 原因、alignment checks 和 warnings。
+- 支持 `--framing railstb|railslr|frame`。
+- 默认生成 `run_kikit_panelize.ps1` 和 `run_kikit_panelize.bat`。
+- 自动位置不理想时，支持 manual tab-plan 工程师 override。
 
 ## 安装要求
 
 - Python 3.8+
-- KiCad，用于打开和检查 `.kicad_pcb`
+- KiCad，用于目检
 - KiKit 1.8+
 
 已验证环境：
@@ -47,249 +34,271 @@
 - KiCad 9.0
 - KiKit 1.8.0
 
-## 快速开始
+## 推荐快速流程
 
-先运行 inspect-only：
+1. 先运行 inspect-only。
+2. 生成 annotation PCB、JSON preset 和 Windows runner。
+3. 双击 `run_kikit_panelize.bat`，或手动运行 `.ps1`。
+4. 在 KiCad 中打开生成的 panel PCB 进行目检。
+5. 如果 Tab 位置不理想，用自然语言告诉 Agent 想要的坐标，让 Agent 生成 `manual_tab_plan.json`。
+6. 使用 `--tab-plan manual_tab_plan.json` 重新生成。
 
-```powershell
-python scripts/panelize.py "path\to\board.kicad_pcb" --rows 5 --cols 10 --inspect-only
-```
-
-检查结果没有明显问题后，再生成 annotation PCB 和 JSON preset：
-
-```powershell
-python scripts/panelize.py "path\to\board.kicad_pcb" --rows 5 --cols 10
-```
-
-使用 KiKit 1.8 正确命令格式生成拼版 PCB：
+先检查：
 
 ```powershell
-kikit panelize -p "panel_output\board_panel_5x10.json" "panel_output\board_annotation_tabs.kicad_pcb" "panel_output\board_kikit_panel_5x10.kicad_pcb"
+python scripts\panelize.py "board.kicad_pcb" --rows 2 --cols 2 --framing frame --inspect-only
 ```
 
-## 推荐工作流
-
-建议按以下顺序执行：
-
-1. 先运行 `--inspect-only`，检查板框、Edge.Cuts、keepout、recommended tabs 和 warnings。
-2. 生成 2x1 测试，用于验证上下连接。
-3. 生成 1x2 测试，用于验证左右连接。
-4. 检查无误后，再生成完整拼版参数。
-5. 使用 KiKit panelize 实际生成 panel PCB。
-6. 在 KiCad 中打开 annotation PCB 和 panel PCB 进行目检。
-
-示例命令：
+生成文件：
 
 ```powershell
-python scripts/panelize.py "path\to\board.kicad_pcb" --rows 2 --cols 1 --inspect-only
-python scripts/panelize.py "path\to\board.kicad_pcb" --rows 2 --cols 1
-python scripts/panelize.py "path\to\board.kicad_pcb" --rows 1 --cols 2
-python scripts/panelize.py "path\to\board.kicad_pcb" --rows 5 --cols 10
+python scripts\panelize.py "board.kicad_pcb" --rows 2 --cols 2 --framing frame --output-dir "output"
 ```
 
-KiKit 示例：
-
-```powershell
-kikit panelize -p "panel_output\board_panel_5x10.json" "panel_output\board_annotation_tabs.kicad_pcb" "panel_output\board_kikit_panel_5x10.kicad_pcb"
-```
-
-## 命令行参数
-
-常用参数：
+普通 Windows 用户可以双击：
 
 ```text
---rows N                  拼版行数
---cols N                  拼版列数
---tab-top N               top 边 Tab 数量，默认 2
---tab-bot N               bottom 边 Tab 数量，默认 2
---tab-left N              left 边 Tab 数量，默认 1
---tab-right N             right 边 Tab 数量，默认 1
---tab-width MM            普通 Tab 宽度，默认 3.0
---narrow-width MM         narrow Tab 宽度，默认 1.8
---drill MM                mousebite 孔径，默认 0.4
---spacing MM              mousebite 孔间距，默认 0.7
---offset MM               mousebite cuts.offset，默认 -0.15
---prolong MM              mousebite prolong，默认 0.6
---annotation-offset MM    annotation footprint 原点向板外偏移，默认 0.5
---inspect-only            只输出检查结果，不写文件
---tab-plan JSON           手动 Tab plan，支持 JSON 字符串或 JSON 文件路径
---output-dir DIR          输出目录，默认 panel_output
---prefix NAME             输出文件名前缀
+output\run_kikit_panelize.bat
 ```
 
-## 输出文件
-
-默认输出到 `panel_output/`，常见文件包括：
-
-```text
-board_annotation_tabs.kicad_pcb
-board_test_2x1.json
-board_test_1x2.json
-board_panel_5x10.json
-```
-
-其中：
-
-- `board_annotation_tabs.kicad_pcb` 是插入 annotation Tab 的 PCB 副本。
-- `board_test_2x1.json` 用于上下连接小样测试。
-- `board_test_1x2.json` 用于左右连接小样测试。
-- `board_panel_5x10.json` 用于完整拼版。
-
-原始 `.kicad_pcb` 不会被覆盖。
-
-## 默认规则
-
-默认值：
-
-```text
-上下边默认 2 个 Tab
-左右边默认 1 个 Tab
-普通 Tab 宽度 3.0mm
-narrow Tab 默认宽度 1.8mm，建议范围 1.5mm 到 2.2mm
-短边可自动使用 narrow width
-空间不足时自动减少 Tab 数
-annotation_offset 默认 0.5mm
-mousebite drill 0.4mm
-mousebite spacing 0.7mm
-mousebite offset -0.15mm
-mousebite prolong 0.6mm
-```
-
-`annotation_offset` 与 `cuts.offset` 是两个不同参数：
-
-- `annotation_offset` 是 KiKit Tab annotation footprint 原点相对板边向板外偏移的距离，默认 `0.5mm`。它用于让 KiKit 识别 Tab annotation 位于板边或板外。
-- `cuts.offset` 是 mousebite 孔列相对于连接筋/板边的偏移，默认 `-0.15mm`。它影响邮票孔切割位置，不改变 annotation footprint 原点。
-
-Tab rotation 默认值：
-
-```text
-top: 270
-bottom: 90
-left: 0
-right: 180
-```
-
-## KiKit 拼版
-
-KiKit 1.8 的正确命令格式是：
+也可以手动运行 PowerShell：
 
 ```powershell
-kikit panelize -p <preset.json> <annotation_pcb.kicad_pcb> <output_panel.kicad_pcb>
+cd output
+powershell -ExecutionPolicy Bypass -File .\run_kikit_panelize.ps1
 ```
 
-示例：
+## 默认输出行为
+
+默认命令：
 
 ```powershell
-kikit panelize -p "panel_output\board_panel_5x10.json" "panel_output\board_annotation_tabs.kicad_pcb" "panel_output\board_kikit_panel_5x10.kicad_pcb"
+python scripts\panelize.py "board.kicad_pcb" --rows 2 --cols 2 --framing frame --output-dir "output"
 ```
 
-## inspect-only 检查
+默认生成：
 
-`--inspect-only` 不会写文件，适合在正式生成前检查几何识别和 Tab 推荐结果。
+```text
+output\<basename>_annotation_tabs.kicad_pcb
+output\<basename>_panel_<rows>x<cols>.json
+output\run_kikit_panelize.ps1
+output\run_kikit_panelize.bat
+```
 
-它至少用于检查：
+默认不再生成 smoke-test preset：
 
-- board bbox
-- Edge.Cuts segments
-- Edge.Cuts circles
-- keepout intervals
-- safe segments
-- recommended tabs
-- warnings
-- strong warnings
-- anchor 坐标和 footprint 坐标
-- Tab 是否向板外偏移
+```text
+<basename>_test_2x1.json
+<basename>_test_1x2.json
+```
 
-示例：
+默认 runner 只生成用户指定的完整 panel，例如：
+
+```text
+<basename>_panel_2x2.kicad_pcb
+```
+
+## Windows Runner
+
+普通 Windows 用户推荐双击：
+
+```text
+run_kikit_panelize.bat
+```
+
+自动化用户或熟悉 PowerShell 的用户推荐运行：
 
 ```powershell
-python scripts/panelize.py "path\to\board.kicad_pcb" --rows 5 --cols 10 --inspect-only
+powershell -ExecutionPolicy Bypass -File .\run_kikit_panelize.ps1
 ```
 
-如果输出包含 strong warning，应先检查原因，再决定是否继续生成，或改用手动 `--tab-plan`。
+Runner 行为：
 
-## 手动 Tab 计划
+- `.bat` 适合双击运行。
+- `.bat` 只调用 `.ps1`，不重复写 KiKit 查找逻辑。
+- `.bat` 结束后会停留窗口，方便用户查看成功或失败信息。
+- `.ps1` 是主 runner，更适合自动化。
+- runner 不修改原始 PCB。
+- runner 会自动查找常见 Windows KiCad / KiKit 路径和 PATH。
 
-当自动放置不符合实际机械要求时，可以使用 `--tab-plan` 手动指定 Tab。
+如需强制指定 KiKit 路径：
 
-示例 JSON：
+```powershell
+$env:KIKIT_EXE = "D:\KiCad\9.0\bin\Scripts\kikit.exe"
+```
+
+## Mimo / Claude Code / Linux VM 工作流
+
+对于 Mimo、Claude Code、Linux VM 等不能直接调用 Windows KiCad / KiKit `.exe` 的环境：
+
+1. Agent 先生成 annotation PCB、JSON preset 和 runner 文件。
+2. 用户在 Windows 中打开输出目录。
+3. 双击 `run_kikit_panelize.bat`，或在 Windows PowerShell 中运行 `.ps1`。
+4. 不要让 Linux VM 硬调用 Windows KiKit `.exe`。
+
+这样可以让 Agent 负责生成文件，把 KiKit panelize 留在原生 Windows KiCad 环境中执行。
+
+## Smoke-Test Preset
+
+默认输出对普通用户保持简单：只准备用户指定的完整 panel。
+
+如果需要调试 top/bottom 或 left/right 连接，可以加 `--include-smoke-tests`：
+
+```powershell
+python scripts\panelize.py "board.kicad_pcb" --rows 2 --cols 2 --framing frame --include-smoke-tests --output-dir "output"
+```
+
+额外生成：
+
+```text
+<basename>_test_2x1.json
+<basename>_test_1x2.json
+```
+
+启用 smoke tests 后，runner 会生成：
+
+```text
+<basename>_panel_2x1.kicad_pcb
+<basename>_panel_1x2.kicad_pcb
+<basename>_panel_<rows>x<cols>.kicad_pcb
+```
+
+## Framing 外框
+
+使用 `--framing` 选择 KiKit preset 中的 framing 类型：
+
+```powershell
+python scripts\panelize.py "board.kicad_pcb" --rows 5 --cols 4 --framing frame
+```
+
+支持：
+
+| 参数 | 含义 |
+|------|------|
+| `railstb` | 上下 rail，默认旧行为。 |
+| `railslr` | 左右 rail。 |
+| `frame` | 完整四边外框，适合很多实际打板场景。 |
+
+即使 KiKit 成功生成 frame，也仍然需要 KiCad 目检。
+
+## Inspect-Only 检查
+
+推荐第一步总是运行 inspect-only：
+
+```powershell
+python scripts\panelize.py "board.kicad_pcb" --rows 2 --cols 2 --framing frame --inspect-only
+```
+
+inspect-only：
+
+- 不写文件。
+- 不生成 runner。
+- 输出 board bbox 和 board size。
+- 输出 Edge.Cuts segments 和 Edge.Cuts circles。
+- 输出 circle keepouts 和 safe segments。
+- 输出 paired intervals 和 candidate evaluation。
+- 输出 paired top/bottom X positions 和 paired left/right Y positions。
+- 输出 alignment checks、selected/skipped 原因、warnings 和 strong warnings。
+
+它适合在正式生成前判断自动 Tab 位置是否合理。
+
+## 自然语言 Manual Tab Plan
+
+用户不需要自己手写 JSON。当自动 Tab 位置不理想时，可以用自然语言告诉 Agent 想要的 Tab 坐标。
+
+中文例子：
+
+```text
+上下两个 Tab 我想放在 X=87.4 和 X=121.5；左右 Tab 我想放在 Y=109.2；左右宽度用 2.2mm。
+```
+
+Agent 应生成 `manual_tab_plan.json`，例如：
 
 ```json
 {
   "tabs": [
-    {"edge": "bottom", "x": 145.8, "width": 3.0},
-    {"edge": "bottom", "x": 163.5, "width": 2.2},
-    {"edge": "left", "y": 76.0, "width": 3.0}
+    {"edge": "top", "x": 87.4, "width": 3.0},
+    {"edge": "bottom", "x": 87.4, "width": 3.0},
+    {"edge": "top", "x": 121.5, "width": 3.0},
+    {"edge": "bottom", "x": 121.5, "width": 3.0},
+    {"edge": "left", "y": 109.2, "width": 2.2},
+    {"edge": "right", "y": 109.2, "width": 2.2}
   ]
 }
 ```
 
-命令示例：
+然后重新生成：
 
 ```powershell
-python scripts/panelize.py "path\to\board.kicad_pcb" --rows 5 --cols 10 --tab-plan tab_plan.json
+python scripts\panelize.py "board.kicad_pcb" --rows 2 --cols 2 --framing frame --tab-plan "output\manual_tab_plan.json" --output-dir "output"
 ```
 
-手动计划仍会生成真实 `footprint "kikit:Tab"`，并保持对应边的 rotation 和 annotation offset。
+规则：
 
-## 安全与生产检查
+- top / bottom 使用 X 坐标。
+- left / right 使用 Y 坐标。
+- top 和 bottom 必须成对使用同一个 X。
+- left 和 right 必须成对使用同一个 Y。
+- 未指定宽度时默认 `3.0mm`。
+- manual tab-plan 是工程师 override。
+- 使用 manual tab-plan 后仍需 KiCad 目检。
 
-工具生成成功不等于可以直接生产。KiKit panelize 成功也不等于没有机械风险。
+## 命令参数表
 
-生产前必须在 KiCad 中目检，至少检查邮票孔和连接筋是否碰到或过于接近：
+| 参数 | 含义 |
+|------|------|
+| `--rows N` | 拼版行数。 |
+| `--cols N` | 拼版列数。 |
+| `--framing railstb|railslr|frame` | KiKit framing 类型。 |
+| `--inspect-only` | 只输出几何和 Tab 诊断，不写文件。 |
+| `--tab-plan JSON_OR_PATH` | manual tab plan，支持 JSON 字符串或 JSON 文件路径。 |
+| `--include-smoke-tests` | 额外生成 2x1 / 1x2 smoke-test preset 和 runner 步骤。 |
+| `--no-runner` | 不生成 `run_kikit_panelize.ps1` 和 `run_kikit_panelize.bat`。 |
+| `--output-dir DIR` | 输出目录，默认 `panel_output`。 |
+| `--annotation-offset MM` | 将 `kikit:Tab` footprint 原点向板外偏移，默认 `0.5`。 |
+| `--tab-width MM` | 标准 Tab 宽度，默认 `3.0`。 |
+| `--narrow-width MM` | narrow Tab 宽度，默认 `1.8`。 |
+| `--drill MM` | mousebite 孔径，默认 `0.4`。 |
+| `--spacing MM` | mousebite 孔间距，默认 `0.7`。 |
+| `--offset MM` | KiKit mousebite `cuts.offset`，默认 `-0.15`。 |
+| `--prolong MM` | KiKit mousebite prolong，默认 `0.6`。 |
 
-- Type-C 凹槽
-- 安装孔
-- Edge.Cuts 圆孔
-- 板边连接器
-- 金手指
+## 安全与验收检查
+
+KiKit 成功不等于可以直接生产。送板前必须用 KiCad 打开生成的 panel PCB 目检。
+
+至少检查 Tab 和邮票孔是否过于接近：
+
+- 连接器
 - 焊盘
-- 丝印
-- 装配禁布区
+- 安装孔
+- 金手指
+- 大镂空
+- Type-C / USB 凹槽
+- 禁布区
+- 板边槽口和异形边
 
-最终应以工程师检查和板厂工艺规范为准。对于关键项目，建议先制作小样或使用板厂 DFM 工具复核。
+对于复杂异形板、连接器密集边、大镂空，或已有量产验证位置的板子，推荐使用自然语言 manual tab-plan 工作流，并用 `--tab-plan` 重新生成。
 
-## 常见问题
+## 仓库结构
 
-### KiKit 报 `Cannot create tab` 怎么办？
-
-常见原因包括：
-
-- annotation Tab footprint 位于板内。
-- annotation offset 方向不正确。
-- Tab rotation 不正确。
-- Tab 被放在凹槽、短边内部或其他非安全位置。
-
-建议处理方式：
-
-- 先运行 `--inspect-only`。
-- 检查 anchor 坐标和 footprint 坐标。
-- 检查 top / bottom / left / right 的 rotation。
-- 检查 keepout intervals、safe segments、warnings 和 strong warnings。
-- 必要时使用 `--annotation-offset` 调整外移距离，或使用 `--tab-plan` 手动指定位置。
-
-### 为什么短边只放了一个 Tab？
-
-通常是因为短边长度不足，或 Edge.Cuts 圆孔、开口、连接器 keepout 占用了安全区域。
-
-脚本会先尝试普通宽度，再尝试 narrow width。如果仍无法满足 end clearance 和最小 Tab 间距，就会自动减少 Tab 数，避免 Tab 重叠、邮票孔过密或掰板困难。
-
-### 为什么要先做 2x1 / 1x2？
-
-`2x1` 用于验证上下连接和 top/bottom Tab。`1x2` 用于验证左右连接和 left/right Tab。
-
-小样通过后再生成完整拼版，可以更早发现方向、offset、keepout、Tab 间距和 KiKit preset 配置问题，降低整版失败风险。
-
-## 版本与验证环境
-
-当前版本建议标记为：`v0.1.0-beta`
-
-已验证环境：
-
-- KiCad 9.0
-- KiKit 1.8.0
-
-该版本已完成真实 KiKit panelize 验证，但仍建议在不同板形、不同板厂规则和不同 KiKit 版本下进行独立检查。
+```text
+kicad-kikit-panelizer/
+├── SKILL.md
+├── README.md
+├── README-zh.md
+├── CHANGELOG.md
+├── LICENSE
+├── agents/
+│   └── openai.yaml
+├── scripts/
+│   └── panelize.py
+├── references/
+│   ├── DEFAULTS.md
+│   └── MANUAL.md
+└── dist/
+    └── skill.zip
+```
 
 ## License
 
